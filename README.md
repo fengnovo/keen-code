@@ -243,13 +243,15 @@ keen-code/
 │       ├── llm.ts                    # LLM 层：MockLLM + DeepSeekLLM（流式）
 │       ├── loop.ts                   # Agent 主循环（ReAct 模式）
 │       ├── context.ts                # 上下文管理器（消息历史 + 自动压缩）
-│       ├── sandbox.ts                # 本地沙箱（workspace 目录隔离）
-│       ├── dockerSandbox.ts          # Docker 沙箱（容器隔离执行）
+│       ├── mcp.ts                    # 远程 MCP 接入（动态导入 SDK）
 │       ├── memory.ts                 # 记忆系统（短期 + 长期 + 3个工具）
 │       ├── skills.ts                 # 技能系统（加载 SKILL.md + use_skill 工具）
-│       ├── session.ts                  # 会话记录器（JSONL 格式）
-│       ├── sessionView.ts              # 会话记录查看器（list / tree）
-│       ├── mcp.ts                    # 远程 MCP 接入（动态导入 SDK）
+│       ├── sandbox/                  # 沙箱模块
+│       │   ├── sandbox.ts            # 本地沙箱（workspace 目录隔离）
+│       │   └── dockerSandbox.ts      # Docker 沙箱（容器隔离执行）
+│       ├── session/                  # 会话记录模块
+│       │   ├── session.ts            # 会话记录器（JSONL 格式）
+│       │   └── sessionView.ts        # 会话记录查看器（list / tree）
 │       └── tools/
 │           ├── registry.ts           # 工具注册表（注册/执行/zod→JSON Schema）
 │           └── builtin.ts            # 内置工具（run_shell/read_file/write_file/finish）
@@ -260,9 +262,9 @@ keen-code/
 │   └── sess_xxx/                     # 每个会话一个子目录
 ├── _memory/                           # 长期记忆存储
 │   └── long_term.json                # 长期记忆 JSON 文件
-├── _sessions/                           # 会话记录目录
+├── _sessions/                         # 会话记录目录
 │   └── sess_xxx/                     # 每个会话一个目录
-│       └── run_xxx.jsonl           # 每次 run 一个 JSONL 文件
+│       └── run_xxx.jsonl             # 每次 run 一个 JSONL 文件
 ├── package.json
 ├── tsconfig.json
 └── .env                              # 环境变量配置
