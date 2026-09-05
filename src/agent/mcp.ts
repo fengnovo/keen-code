@@ -12,6 +12,7 @@
 import { ToolRegistry } from "./tools/registry.js";
 import { Tool } from "./tools/registry.js";
 import { z } from "zod";
+import { scanMCPServer, formatScanResult, shouldBlockTool, SecurityScanOptions } from "./mcpSecurity.js";
 
 // MCP 客户端类型（动态导入，避免未安装时报错）
 // 使用 any 以兼容不同版本的 MCP SDK
@@ -24,6 +25,7 @@ type MCPClient = any;
  * @param name 服务名称（用于工具前缀，格式：name__toolName）
  * @param url  MCP 服务 URL
  * @param registry 工具注册表
+ * @param securityOptions 安全扫描配置（可选，默认阻止 critical/high 级别工具）
  * @returns 连接后的 MCP 客户端
  *
  * 注意：需要安装 @modelcontextprotocol/client 包
@@ -31,7 +33,8 @@ type MCPClient = any;
 export async function connectMCP(
   name: string,
   url: string,
-  registry: ToolRegistry
+  registry: ToolRegistry,
+  securityOptions: SecurityScanOptions = {}
 ): Promise<MCPClient> {
   // 动态导入 MCP SDK（未安装时报错提示）
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -60,13 +63,11 @@ export async function connectMCP(
     transport = new StreamableHTTPClientTransport(new URL(url));
   }
 
-  const client = new Client(transport);
+  // MCP SDK 2.x API：构造函数传 clientInfo，connect 传 transport
+  const client = new Client({ name: "keen-code", version: "0.1.0" });
 
   // 连接并初始化 MCP 会话
-  await client.connect({
-    capabilities: {},
-    clientInfo: { name: "keen-code", version: "0.1.0" },
-  });
+  await client.connect(transport);
 
   // 获取远程工具列表
   const toolsResult = await client.listTools();
@@ -76,9 +77,22 @@ export async function connectMCP(
     console.log(`  - ${tool.name}`);
   }
 
+  // 安全扫描：检查 MCP 服务器和工具的安全性（OWASP MCP Top 10）
+  const scanResult = scanMCPServer(url, toolsResult.tools);
+  console.log(formatScanResult(scanResult));
+
   // 将每个远程工具包装成本地 Tool 接口并注册
+  // 跳过存在 critical/high 安全问题的工具（除非 warnOnly 模式）
+  let blockedCount = 0;
   for (const mcpTool of toolsResult.tools) {
     const toolName = `${name}__${mcpTool.name}`; // 加前缀避免命名冲突
+
+    if (shouldBlockTool(mcpTool.name, scanResult, securityOptions)) {
+      console.log(`  ⛔ 已阻止注册危险工具: ${toolName}`);
+      blockedCount++;
+      continue;
+    }
+
     const wrappedTool = createMCPToolWrapper(
       toolName,
       mcpTool.name,
@@ -87,6 +101,10 @@ export async function connectMCP(
       client
     );
     registry.register(wrappedTool);
+  }
+
+  if (blockedCount > 0) {
+    console.log(`[MCP ${name}] 已注册 ${toolsResult.tools.length - blockedCount} 个工具，阻止 ${blockedCount} 个危险工具`);
   }
 
   return client;

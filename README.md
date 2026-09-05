@@ -556,6 +556,9 @@ Agent 启动时自动加载所有技能，摘要注入 system prompt。AI 可通
 
 ```bash
 npm run cli -- chat --mcp tandem=https://tandem.ac/mcp
+
+# 用真实的 MCP 服务地址
+npm run cli -- chat --mcp tandem=https:// 你的真实-mcp服务地址/mcp
 ```
 
 - 远程工具会以 `<服务名>__<工具名>` 的格式注册
