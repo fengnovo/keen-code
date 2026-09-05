@@ -11,17 +11,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // ---------- 沙箱接口 ----------
-/** Shell 命令执行结果 */
-export interface ShellResult {
-  stdout: string;
-  stderr: string;
-  exitCode: number;
-}
-
 /** 沙箱抽象接口，LocalSandbox 和 DockerSandbox 都实现此接口 */
 export interface Sandbox {
   /** 在沙箱工作目录中执行 shell 命令 */
-  runShell(command: string): Promise<ShellResult>;
+  runShell(
+    command: string,
+  ): Promise<{ stdout: string; stderr: string; exitCode: number }>;
 
   /** 读取工作目录内的文件（路径相对于工作目录） */
   readFile(relativePath: string): Promise<string>;
@@ -67,7 +62,9 @@ export class LocalSandbox implements Sandbox {
    * 在沙箱工作目录中执行 shell 命令
    * 通过 /bin/bash -c 执行，设置 30 秒超时和 1MB 输出上限
    */
-  async runShell(command: string): Promise<ShellResult> {
+  async runShell(
+    command: string,
+  ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     return new Promise((resolve) => {
       execFile(
         '/bin/bash',
