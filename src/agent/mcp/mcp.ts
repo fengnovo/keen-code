@@ -14,7 +14,6 @@ import { Tool } from '../tools/registry.js';
 import { z } from 'zod';
 import {
   scanMCPServer,
-  formatScanResult,
   shouldBlockTool,
   SecurityScanOptions,
 } from './mcpSecurity.js';
@@ -126,24 +125,16 @@ async function registerMCPTools(
 ): Promise<MCPClient> {
   const toolsResult = await client.listTools();
 
-  console.log(`[MCP ${name}] 已连接，发现 ${toolsResult.tools.length} 个工具:`);
-  for (const tool of toolsResult.tools) {
-    console.log(`  - ${tool.name}`);
-  }
-
   // 安全扫描：检查 MCP 服务器和工具的安全性（OWASP MCP Top 10）
   const scanResult = scanMCPServer(source, toolsResult.tools);
-  console.log(formatScanResult(scanResult));
 
   // 将每个远程工具包装成本地 Tool 接口并注册
   // 跳过存在 critical/high 安全问题的工具（除非 warnOnly 模式）
-  let blockedCount = 0;
   for (const mcpTool of toolsResult.tools) {
     const toolName = `${name}__${mcpTool.name}`; // 加前缀避免命名冲突
 
     if (shouldBlockTool(mcpTool.name, scanResult, securityOptions)) {
       console.log(`  ⛔ 已阻止注册危险工具: ${toolName}`);
-      blockedCount++;
       continue;
     }
 
@@ -155,12 +146,6 @@ async function registerMCPTools(
       client,
     );
     registry.register(wrappedTool);
-  }
-
-  if (blockedCount > 0) {
-    console.log(
-      `[MCP ${name}] 已注册 ${toolsResult.tools.length - blockedCount} 个工具，阻止 ${blockedCount} 个危险工具`,
-    );
   }
 
   return client;

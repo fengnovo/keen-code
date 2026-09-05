@@ -22,6 +22,10 @@ import {
  * 会逐字模拟流式输出效果
  */
 export class MockLLM implements LLMProvider {
+  getModelName(): string {
+    return 'mock';
+  }
+
   async chat(
     messages: ChatMessage[],
     tools: ToolDefinition[],
@@ -74,6 +78,10 @@ export class DeepSeekLLM implements LLMProvider {
 
     this.client = new OpenAI({ apiKey, baseURL });
     this.model = model || 'deepseek-v4-flash';
+  }
+
+  getModelName(): string {
+    return this.model;
   }
 
   async chat(

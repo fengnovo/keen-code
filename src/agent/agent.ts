@@ -64,6 +64,10 @@ export interface CreateAgentResult {
   sandbox: Sandbox;
   /** 会话 ID */
   sessionId: string;
+  /** 已成功连接的 MCP 名称 */
+  mcpNames: string[];
+  /** Agent 自带的工具名称（不包含 MCP 工具） */
+  systemToolNames: string[];
 }
 
 /**
@@ -78,6 +82,7 @@ export async function createAgent(
 ): Promise<CreateAgentResult> {
   const mock = options.mock ?? false;
   const mcpClients: unknown[] = [];
+  const mcpNames: string[] = [];
   // 生成会话 ID（如果未传入）
   const sessionId =
     options.sessionId ||
@@ -123,12 +128,16 @@ export async function createAgent(
   // finish 工具：提交最终回答
   toolRegistry.register(createFinishTool());
 
+  // MCP 工具注册前保存内置工具列表，供 CLI 展示运行时配置
+  const systemToolNames = toolRegistry.listNames();
+
   // 7. 接入远程 MCP 服务（如果配置了）
   if (options.mcpServers && Object.keys(options.mcpServers).length > 0) {
     for (const [name, url] of Object.entries(options.mcpServers)) {
       try {
         const client = await connectMCP(name, url, toolRegistry);
         mcpClients.push(client);
+        mcpNames.push(name);
       } catch (e: unknown) {
         console.error(`[MCP ${name}] 连接失败: ${(e as Error).message}`);
       }
@@ -145,6 +154,7 @@ export async function createAgent(
           toolRegistry,
         );
         mcpClients.push(client);
+        mcpNames.push(name);
       } catch (e: unknown) {
         console.error(`[MCP ${name}] 连接失败: ${(e as Error).message}`);
       }
@@ -169,5 +179,12 @@ export async function createAgent(
     await agent.restoreSession(messages);
   }
 
-  return { agent, mcpClients, sandbox, sessionId };
+  return {
+    agent,
+    mcpClients,
+    sandbox,
+    sessionId,
+    mcpNames,
+    systemToolNames,
+  };
 }

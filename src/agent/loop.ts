@@ -264,6 +264,16 @@ export class AgentRun {
     return this.context;
   }
 
+  /** 获取当前实际使用的模型名称 */
+  getModelName(): string {
+    return this.llm.getModelName();
+  }
+
+  /** 获取当前完整的 system prompt（包含工作目录、记忆和技能摘要） */
+  async getSystemPrompt(): Promise<string> {
+    return this.buildSystemPrompt();
+  }
+
   /** 获取会话记录器 */
   getRecorder(): SessionRecorder {
     return this.recorder;

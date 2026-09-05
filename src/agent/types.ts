@@ -72,6 +72,9 @@ export interface RunCallbacks {
 
 /** LLM Provider 接口，所有 LLM 实现都需要满足此接口 */
 export interface LLMProvider {
+  /** 返回当前实际使用的模型名称 */
+  getModelName(): string;
+
   /**
    * 调用大模型，传入消息历史和可用工具，返回模型响应
    * @param messages 消息历史（包含 system / user / assistant / tool）

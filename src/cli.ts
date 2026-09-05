@@ -25,6 +25,11 @@ import { ToolCall, RunCallbacks } from './agent/types.js';
 import { LoadingIndicator } from './utils/loading.js';
 import * as readline from 'node:readline';
 
+/** 将名称列表格式化为单行，空列表显示“无” */
+function formatNameList(names: string[]): string {
+  return names.length > 0 ? names.join(', ') : '无';
+}
+
 /**
  * 格式化工具调用为可读字符串
  * 截断过长的字符串参数
@@ -228,12 +233,16 @@ async function chatCommand(
     mcpCommands,
   });
 
-  const recorder = current.agent.getRecorder();
-  console.log('=== keen-code chat 模式 ===');
-  console.log('输入 /exit 退出，/help 查看内置命令');
-  console.log(`Session: ${recorder.getSessionId()}`);
-  console.log(`Run:   ${recorder.getRunId()}`);
-  console.log(`工作目录: ${current.sandbox.getWorkDir()}`);
+  const skillNames = current.agent
+    .getSkills()
+    .listSkills()
+    .map((skill) => skill.name);
+  console.log(`模型: ${current.agent.getModelName()}`);
+  console.log(`Skills: ${formatNameList(skillNames)}`);
+  console.log(`MCP: ${formatNameList(current.mcpNames)}`);
+  console.log(`系统工具: ${formatNameList(current.systemToolNames)}`);
+  console.log('System Prompt:');
+  console.log(await current.agent.getSystemPrompt());
   console.log('');
 
   // 创建 readline 交互
