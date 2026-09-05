@@ -4,13 +4,13 @@
  * 核心流程：用户输入 → LLM 推理 → 工具执行 → 结果回传 → 循环直到完成
  */
 
-import { LLMProvider, ChatMessage, ToolCall, RunCallbacks } from "./types.js";
-import { ToolRegistry } from "./tools/registry.js";
-import { Sandbox } from "./sandbox/sandbox.js";
-import { MemoryManager } from "./memory.js";
-import { SkillManager } from "./skills.js";
-import { ContextManager } from "./context.js";
-import { SessionRecorder } from "./sessions/session.js";
+import { LLMProvider, ChatMessage, ToolCall, RunCallbacks } from './types.js';
+import { ToolRegistry } from './tools/registry.js';
+import { Sandbox } from './sandbox/sandbox.js';
+import { MemoryManager } from './memory.js';
+import { SkillManager } from './skills/skills.js';
+import { ContextManager } from './context.js';
+import { SessionRecorder } from './sessions/session.js';
 
 /** 每轮最多调用 10 次工具，防止死循环 */
 const MAX_TOOL_CALLS_PER_TURN = 10;
@@ -74,7 +74,7 @@ export class AgentRun {
     const systemPrompt = await this.buildSystemPrompt();
     if (this.turnCount === 1) {
       this.context.addMessage({
-        role: "system",
+        role: 'system',
         content: systemPrompt,
       });
       await this.recorder.sessionStart(userInput);
@@ -82,7 +82,7 @@ export class AgentRun {
 
     // 添加用户消息到上下文
     this.context.addMessage({
-      role: "user",
+      role: 'user',
       content: userInput,
     });
 
@@ -100,20 +100,20 @@ export class AgentRun {
       await this.recorder.llmCall(
         this.turnCount,
         messages,
-        toolDefs.map((t) => t.name)
+        toolDefs.map((t) => t.name),
       );
       const response = await this.llm.chat(messages, toolDefs, { onToken });
       await this.recorder.llmResponse(
         this.turnCount,
         response.content,
-        response.tool_calls.length
+        response.tool_calls.length,
       );
 
       // 情况 1：LLM 没有调用工具，直接返回文本回答
       if (response.tool_calls.length === 0) {
-        const answer = response.content || "（无响应内容）";
+        const answer = response.content || '（无响应内容）';
         this.context.addMessage({
-          role: "assistant",
+          role: 'assistant',
           content: answer,
         });
         await this.recorder.turnEnd(this.turnCount, answer);
@@ -122,8 +122,8 @@ export class AgentRun {
 
       // 情况 2：LLM 调用了工具，先记录 assistant 消息（含 tool_calls）
       this.context.addMessage({
-        role: "assistant",
-        content: response.content ?? "",
+        role: 'assistant',
+        content: response.content ?? '',
         tool_calls: response.tool_calls,
       });
 
@@ -137,7 +137,7 @@ export class AgentRun {
 
         // 把工具执行结果加回消息历史，供下一轮 LLM 推理使用
         this.context.addMessage({
-          role: "tool",
+          role: 'tool',
           tool_call_id: toolCall.id,
           name: toolCall.name,
           content: JSON.stringify(result),
@@ -145,12 +145,15 @@ export class AgentRun {
       }
 
       // 情况 3：如果调用了 finish 工具，直接结束本轮
-      const finishCall = response.tool_calls.find((tc: ToolCall) => tc.name === "finish");
+      const finishCall = response.tool_calls.find(
+        (tc: ToolCall) => tc.name === 'finish',
+      );
       if (finishCall) {
-        const finishAnswer = (finishCall.arguments as { answer?: string }).answer;
+        const finishAnswer = (finishCall.arguments as { answer?: string })
+          .answer;
         // 优先用 finish 的 answer 参数；如果没有，用 LLM 返回的 content
         const answer = String(
-          finishAnswer || response.content || "（任务完成）"
+          finishAnswer || response.content || '（任务完成）',
         );
         await this.recorder.sessionEnd(answer);
         await this.recorder.turnEnd(this.turnCount, answer);
@@ -162,8 +165,10 @@ export class AgentRun {
 
     // 达到工具调用上限，返回最后一条 assistant 消息
     const msgs = this.context.getMessages();
-    const lastAssistant = [...msgs].reverse().find((m) => m.role === "assistant");
-    const answer = lastAssistant?.content || "（达到工具调用上限，已停止）";
+    const lastAssistant = [...msgs]
+      .reverse()
+      .find((m) => m.role === 'assistant');
+    const answer = lastAssistant?.content || '（达到工具调用上限，已停止）';
     await this.recorder.turnEnd(this.turnCount, answer);
     return answer;
   }
@@ -173,7 +178,11 @@ export class AgentRun {
    * 先记录会话事件，再执行工具，最后记录结果事件
    */
   private async executeToolCall(toolCall: ToolCall): Promise<unknown> {
-    await this.recorder.toolCall(this.turnCount, toolCall.name, toolCall.arguments);
+    await this.recorder.toolCall(
+      this.turnCount,
+      toolCall.name,
+      toolCall.arguments,
+    );
 
     let result: unknown;
     try {
@@ -201,7 +210,7 @@ export class AgentRun {
 1. 对于简单的问题（如自我介绍、知识问答、闲聊），直接回复文本即可，不需要调用任何工具。
 2. 只有当任务需要执行命令、读写文件、检索记忆等操作时，才调用相应的工具。
 3. 当你完成了需要工具的任务后，调用 finish 工具提交最终回答，并在 answer 参数中写明你的回答。
-4. 在沙箱中执行命令时，请谨慎操作，不要执行危险命令。`
+4. 在沙箱中执行命令时，请谨慎操作，不要执行危险命令。`,
     );
 
     // 注入当前工作目录
@@ -219,7 +228,7 @@ export class AgentRun {
       parts.push(`\n${skillsSummary}`);
     }
 
-    return parts.join("\n");
+    return parts.join('\n');
   }
 
   /** 获取上下文管理器（chat 模式下 /compress 命令用） */

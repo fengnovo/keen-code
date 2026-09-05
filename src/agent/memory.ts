@@ -9,11 +9,11 @@
  * 同时提供 3 个记忆工具供 AI 调用：remember、remember_longterm、recall
  */
 
-import { promises as fs } from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { Tool } from "./tools/registry.js";
-import { z } from "zod";
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { Tool } from './tools/registry.js';
+import { z } from 'zod';
 
 /** 记忆条目 */
 export interface MemoryEntry {
@@ -37,10 +37,10 @@ export class MemoryManager {
     // 从当前文件位置推算项目根目录，定位 _memory/ 目录
     const __filename = fileURLToPath(import.meta.url);
     const __dirname = path.dirname(__filename);
-    const projectRoot = path.resolve(__dirname, "../..");
-    const memoryDir = path.join(projectRoot, "_memory");
+    const projectRoot = path.resolve(__dirname, '../..');
+    const memoryDir = path.join(projectRoot, '_memory');
     fs.mkdir(memoryDir, { recursive: true });
-    this.longTermPath = path.join(memoryDir, "long_term.json");
+    this.longTermPath = path.join(memoryDir, 'long_term.json');
   }
 
   // ---------- 短期记忆操作 ----------
@@ -59,7 +59,7 @@ export class MemoryManager {
   getAllShort(): MemoryEntry[] {
     const entries: MemoryEntry[] = [];
     for (const [key, value] of this.shortTerm) {
-      entries.push({ key, value, createdAt: "" });
+      entries.push({ key, value, createdAt: '' });
     }
     return entries;
   }
@@ -69,7 +69,7 @@ export class MemoryManager {
   /** 从文件加载长期记忆 */
   private async loadLongTerm(): Promise<MemoryEntry[]> {
     try {
-      const content = await fs.readFile(this.longTermPath, "utf-8");
+      const content = await fs.readFile(this.longTermPath, 'utf-8');
       return JSON.parse(content);
     } catch {
       return []; // 文件不存在或解析失败，返回空数组
@@ -78,7 +78,11 @@ export class MemoryManager {
 
   /** 保存长期记忆到文件 */
   private async saveLongTerm(entries: MemoryEntry[]): Promise<void> {
-    await fs.writeFile(this.longTermPath, JSON.stringify(entries, null, 2), "utf-8");
+    await fs.writeFile(
+      this.longTermPath,
+      JSON.stringify(entries, null, 2),
+      'utf-8',
+    );
   }
 
   /**
@@ -112,7 +116,7 @@ export class MemoryManager {
     const matched = entries.filter(
       (e) =>
         e.key.toLowerCase().includes(lowerQuery) ||
-        e.value.toLowerCase().includes(lowerQuery)
+        e.value.toLowerCase().includes(lowerQuery),
     );
     return matched.slice(-limit).reverse();
   }
@@ -133,21 +137,21 @@ export class MemoryManager {
     const parts: string[] = [];
 
     if (short.length > 0) {
-      parts.push("【短期记忆】");
+      parts.push('【短期记忆】');
       for (const entry of short) {
         parts.push(`- ${entry.key}: ${entry.value}`);
       }
     }
 
     if (long.length > 0) {
-      parts.push("【长期记忆】");
+      parts.push('【长期记忆】');
       // 只展示最近 10 条，避免 prompt 过长
       for (const entry of long.slice(-10)) {
         parts.push(`- ${entry.key}: ${entry.value}`);
       }
     }
 
-    return parts.join("\n");
+    return parts.join('\n');
   }
 }
 
@@ -156,11 +160,11 @@ export class MemoryManager {
 /** remember 工具：写入短期工作记忆 */
 export function createRememberShortTool(memory: MemoryManager): Tool {
   return {
-    name: "remember",
-    description: "写入短期工作记忆，只在当前 session 内有效",
+    name: 'remember',
+    description: '写入短期工作记忆，只在当前 session 内有效',
     schema: z.object({
-      key: z.string().describe("记忆的键名"),
-      value: z.string().describe("记忆的内容"),
+      key: z.string().describe('记忆的键名'),
+      value: z.string().describe('记忆的内容'),
     }),
     async execute(params: { key: string; value: string }) {
       memory.rememberShort(params.key, params.value);
@@ -172,11 +176,11 @@ export function createRememberShortTool(memory: MemoryManager): Tool {
 /** remember_longterm 工具：写入长期持久化记忆 */
 export function createRememberLongTool(memory: MemoryManager): Tool {
   return {
-    name: "remember_longterm",
-    description: "写入长期记忆，会持久化保存，下次会话仍可检索",
+    name: 'remember_longterm',
+    description: '写入长期记忆，会持久化保存，下次会话仍可检索',
     schema: z.object({
-      key: z.string().describe("记忆的键名"),
-      value: z.string().describe("记忆的内容"),
+      key: z.string().describe('记忆的键名'),
+      value: z.string().describe('记忆的内容'),
     }),
     async execute(params: { key: string; value: string }) {
       await memory.rememberLong(params.key, params.value);
@@ -188,11 +192,11 @@ export function createRememberLongTool(memory: MemoryManager): Tool {
 /** recall 工具：按关键词检索长期记忆 */
 export function createRecallTool(memory: MemoryManager): Tool {
   return {
-    name: "recall",
-    description: "检索长期记忆，按关键词匹配",
+    name: 'recall',
+    description: '检索长期记忆，按关键词匹配',
     schema: z.object({
-      query: z.string().describe("检索关键词"),
-      limit: z.number().optional().describe("返回条数，默认 5"),
+      query: z.string().describe('检索关键词'),
+      limit: z.number().optional().describe('返回条数，默认 5'),
     }),
     async execute(params: { query: string; limit?: number }) {
       const results = await memory.recall(params.query, params.limit);

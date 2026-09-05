@@ -9,10 +9,15 @@
  *   npm run cli -- chat --mcp tandem=https://tandem.ac/mcp
  */
 
-import { ToolRegistry } from "../tools/registry.js";
-import { Tool } from "../tools/registry.js";
-import { z } from "zod";
-import { scanMCPServer, formatScanResult, shouldBlockTool, SecurityScanOptions } from "./mcpSecurity.js";
+import { ToolRegistry } from '../tools/registry.js';
+import { Tool } from '../tools/registry.js';
+import { z } from 'zod';
+import {
+  scanMCPServer,
+  formatScanResult,
+  shouldBlockTool,
+  SecurityScanOptions,
+} from './mcpSecurity.js';
 
 // MCP 客户端类型（动态导入，避免未安装时报错）
 // 使用 any 以兼容不同版本的 MCP SDK
@@ -34,7 +39,7 @@ export async function connectMCP(
   name: string,
   url: string,
   registry: ToolRegistry,
-  securityOptions: SecurityScanOptions = {}
+  securityOptions: SecurityScanOptions = {},
 ): Promise<MCPClient> {
   // 动态导入 MCP SDK（未安装时报错提示）
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -45,26 +50,26 @@ export async function connectMCP(
   let StreamableHTTPClientTransport: any;
 
   try {
-    const mcpModule = await import("@modelcontextprotocol/client");
+    const mcpModule = await import('@modelcontextprotocol/client');
     Client = mcpModule.Client;
     SSEClientTransport = mcpModule.SSEClientTransport;
     StreamableHTTPClientTransport = mcpModule.StreamableHTTPClientTransport;
   } catch {
     throw new Error(
-      "未安装 @modelcontextprotocol/client 包，请运行: npm install @modelcontextprotocol/client"
+      '未安装 @modelcontextprotocol/client 包，请运行: npm install @modelcontextprotocol/client',
     );
   }
 
   // 根据 URL 选择传输方式：含 /sse 用 SSE，否则用 StreamableHTTP
   let transport: unknown;
-  if (url.includes("/sse")) {
+  if (url.includes('/sse')) {
     transport = new SSEClientTransport(new URL(url));
   } else {
     transport = new StreamableHTTPClientTransport(new URL(url));
   }
 
   // MCP SDK 2.x API：构造函数传 clientInfo，connect 传 transport
-  const client = new Client({ name: "keen-code", version: "0.1.0" });
+  const client = new Client({ name: 'keen-code', version: '0.1.0' });
 
   // 连接并初始化 MCP 会话
   await client.connect(transport);
@@ -96,15 +101,17 @@ export async function connectMCP(
     const wrappedTool = createMCPToolWrapper(
       toolName,
       mcpTool.name,
-      mcpTool.description || "",
+      mcpTool.description || '',
       mcpTool.inputSchema as Record<string, unknown>,
-      client
+      client,
     );
     registry.register(wrappedTool);
   }
 
   if (blockedCount > 0) {
-    console.log(`[MCP ${name}] 已注册 ${toolsResult.tools.length - blockedCount} 个工具，阻止 ${blockedCount} 个危险工具`);
+    console.log(
+      `[MCP ${name}] 已注册 ${toolsResult.tools.length - blockedCount} 个工具，阻止 ${blockedCount} 个危险工具`,
+    );
   }
 
   return client;
@@ -120,7 +127,7 @@ function createMCPToolWrapper(
   remoteName: string,
   description: string,
   _inputSchema: Record<string, unknown>,
-  client: MCPClient
+  client: MCPClient,
 ): Tool {
   // 用 z.record(z.unknown()) 接收任意参数对象
   const schema = z.record(z.unknown());
@@ -140,9 +147,9 @@ function createMCPToolWrapper(
         // 统一提取文本内容返回
         if (result.content && Array.isArray(result.content)) {
           const textParts = result.content
-            .filter((c: { type: string }) => c.type === "text")
-            .map((c: { text?: string }) => c.text || "")
-            .join("\n");
+            .filter((c: { type: string }) => c.type === 'text')
+            .map((c: { text?: string }) => c.text || '')
+            .join('\n');
           return { content: textParts, isError: result.isError || false };
         }
 
@@ -163,7 +170,7 @@ function createMCPToolWrapper(
 export function parseMCPArgs(mcpArgs: string[]): Record<string, string> {
   const servers: Record<string, string> = {};
   for (const arg of mcpArgs) {
-    const eqIndex = arg.indexOf("=");
+    const eqIndex = arg.indexOf('=');
     if (eqIndex > 0) {
       const name = arg.slice(0, eqIndex);
       const url = arg.slice(eqIndex + 1);

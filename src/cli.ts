@@ -11,14 +11,14 @@
  * 支持流式输出和工具调用过程的实时展示
  */
 
-import "dotenv/config";
-import { createAgent, CreateAgentResult } from "./agent/agent.js";
-import { listSessions, showSessionTree } from "./agent/sessions/sessionView.js";
-import { parseMCPArgs } from "./agent/mcp/mcp.js";
-import { DockerSandbox } from "./agent/sandbox/dockerSandbox.js";
-import { AgentRun } from "./agent/loop.js";
-import { ToolCall, RunCallbacks } from "./agent/types.js";
-import * as readline from "node:readline";
+import 'dotenv/config';
+import { createAgent, CreateAgentResult } from './agent/agent.js';
+import { listSessions, showSessionTree } from './agent/sessions/sessionView.js';
+import { parseMCPArgs } from './agent/mcp/mcp.js';
+import { DockerSandbox } from './agent/sandbox/dockerSandbox.js';
+import { AgentRun } from './agent/loop.js';
+import { ToolCall, RunCallbacks } from './agent/types.js';
+import * as readline from 'node:readline';
 
 /**
  * 格式化工具调用为可读字符串
@@ -27,10 +27,15 @@ import * as readline from "node:readline";
 function formatToolCall(toolCall: ToolCall): string {
   const args = Object.entries(toolCall.arguments)
     .map(([k, v]) => {
-      const val = typeof v === "string" ? (v.length > 80 ? v.slice(0, 77) + "..." : v) : JSON.stringify(v);
+      const val =
+        typeof v === 'string'
+          ? v.length > 80
+            ? v.slice(0, 77) + '...'
+            : v
+          : JSON.stringify(v);
       return `${k}: ${val}`;
     })
-    .join(", ");
+    .join(', ');
   return `${toolCall.name}(${args})`;
 }
 
@@ -40,7 +45,7 @@ function formatToolCall(toolCall: ToolCall): string {
  */
 function formatToolResult(toolName: string, result: unknown): string {
   const str = JSON.stringify(result, null, 2);
-  const truncated = str.length > 500 ? str.slice(0, 497) + "..." : str;
+  const truncated = str.length > 500 ? str.slice(0, 497) + '...' : str;
   return truncated;
 }
 
@@ -82,12 +87,12 @@ function parseArgs(argv: string[]): {
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg.startsWith("--")) {
+    if (arg.startsWith('--')) {
       const key = arg.slice(2);
       const next = argv[i + 1];
-      if (next && !next.startsWith("--")) {
+      if (next && !next.startsWith('--')) {
         // --mcp 支持重复使用，收集为数组
-        if (key === "mcp") {
+        if (key === 'mcp') {
           if (!flags[key]) flags[key] = [];
           (flags[key] as string[]).push(next);
         } else {
@@ -102,13 +107,14 @@ function parseArgs(argv: string[]): {
     }
   }
 
-  const command = args.shift() || "help";
+  const command = args.shift() || 'help';
   return { command, args, flags };
 }
 
 /** 显示帮助信息 */
 function showHelp(): void {
-  console.log(`
+  console.log(
+    `
 keen-code - 一个最小的 Agent Harness
 
 用法:
@@ -133,7 +139,8 @@ keen-code - 一个最小的 Agent Harness
   npm run cli -- chat --sandbox docker
   npm run cli -- session list
   npm run cli -- session tree sess_xxx run_xxx
-`.trim());
+`.trim(),
+  );
 }
 
 // ---------- run 命令：单轮对话 ----------
@@ -143,15 +150,15 @@ keen-code - 一个最小的 Agent Harness
  */
 async function runCommand(
   message: string,
-  flags: Record<string, string | boolean | string[]>
+  flags: Record<string, string | boolean | string[]>,
 ): Promise<void> {
   const mock = flags.mock === true;
-  const sandboxType = (flags.sandbox as string) || "local";
+  const sandboxType = (flags.sandbox as string) || 'local';
   const mcpServers = parseMCPArgs((flags.mcp as string[]) || []);
 
   const { agent, sandbox, sessionId } = await createAgent({
     mock,
-    sandboxType: sandboxType as "local" | "docker",
+    sandboxType: sandboxType as 'local' | 'docker',
     mcpServers,
   });
 
@@ -159,9 +166,9 @@ async function runCommand(
   console.log(`[工作目录: ${sandbox.getWorkDir()}]\n`);
 
   // 流式输出 AI 回答
-  process.stdout.write("AI> ");
+  process.stdout.write('AI> ');
   const answer = await agent.run(message, createRunCallbacks());
-  console.log("\n");
+  console.log('\n');
 
   const recorder = agent.getRecorder();
   console.log(`\n[会话记录已保存: ${recorder.getFilePath()}]`);
@@ -178,36 +185,36 @@ async function runCommand(
  * 支持多轮对话和内置命令（/exit /help /session 等）
  */
 async function chatCommand(
-  flags: Record<string, string | boolean | string[]>
+  flags: Record<string, string | boolean | string[]>,
 ): Promise<void> {
   const mock = flags.mock === true;
-  const sandboxType = (flags.sandbox as string) || "local";
+  const sandboxType = (flags.sandbox as string) || 'local';
   const mcpServers = parseMCPArgs((flags.mcp as string[]) || []);
 
   const { agent, sandbox, sessionId } = await createAgent({
     mock,
-    sandboxType: sandboxType as "local" | "docker",
+    sandboxType: sandboxType as 'local' | 'docker',
     mcpServers,
   });
 
   const recorder = agent.getRecorder();
-  console.log("=== keen-code chat 模式 ===");
-  console.log("输入 /exit 退出，/help 查看内置命令");
+  console.log('=== keen-code chat 模式 ===');
+  console.log('输入 /exit 退出，/help 查看内置命令');
   console.log(`Session: ${recorder.getSessionId()}`);
   console.log(`Run:   ${recorder.getRunId()}`);
   console.log(`工作目录: ${sandbox.getWorkDir()}`);
-  console.log("");
+  console.log('');
 
   // 创建 readline 交互
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
-    prompt: "你> ",
+    prompt: '你> ',
   });
 
   rl.prompt();
 
-  rl.on("line", async (line) => {
+  rl.on('line', async (line) => {
     const input = line.trim();
     if (!input) {
       rl.prompt();
@@ -215,17 +222,17 @@ async function chatCommand(
     }
 
     // 处理内置命令（以 / 开头）
-    if (input.startsWith("/")) {
+    if (input.startsWith('/')) {
       await handleChatCommand(input, agent, rl);
       rl.prompt();
       return;
     }
 
     // 正常对话（流式输出 + 工具调用展示）
-    process.stdout.write("AI> ");
+    process.stdout.write('AI> ');
     try {
       await agent.run(input, createRunCallbacks());
-      console.log("\n");
+      console.log('\n');
     } catch (e: unknown) {
       console.error(`\n错误: ${(e as Error).message}\n`);
     }
@@ -233,12 +240,12 @@ async function chatCommand(
     rl.prompt();
   });
 
-  rl.on("close", async () => {
+  rl.on('close', async () => {
     // 退出时清理 Docker 容器
     if (sandbox instanceof DockerSandbox) {
       await sandbox.destroy();
     }
-    console.log("\n再见！");
+    console.log('\n再见！');
     process.exit(0);
   });
 }
@@ -250,18 +257,19 @@ async function chatCommand(
 async function handleChatCommand(
   input: string,
   agent: AgentRun,
-  rl: readline.Interface
+  rl: readline.Interface,
 ): Promise<void> {
   const parts = input.split(/\s+/);
   const cmd = parts[0];
 
   switch (cmd) {
-    case "/exit":
+    case '/exit':
       rl.close();
       return;
 
-    case "/help":
-      console.log(`
+    case '/help':
+      console.log(
+        `
 内置命令:
   /exit              退出
   /session            查看当前会话记录路径
@@ -270,13 +278,14 @@ async function handleChatCommand(
   /compress          手动压缩对话历史
   /memory            查看当前记忆
   /skills            列出可用技能
-`.trim());
+`.trim(),
+      );
       break;
 
-    case "/session": {
-      if (parts[1] === "list") {
+    case '/session': {
+      if (parts[1] === 'list') {
         await listSessions();
-      } else if (parts[1] === "tree" && parts[2] && parts[3]) {
+      } else if (parts[1] === 'tree' && parts[2] && parts[3]) {
         await showSessionTree(parts[2], parts[3]);
       } else {
         const recorder = agent.getRecorder();
@@ -285,11 +294,11 @@ async function handleChatCommand(
       break;
     }
 
-    case "/compress": {
+    case '/compress': {
       const ctx = agent.getContextManager();
-      console.log("正在压缩对话历史...");
+      console.log('正在压缩对话历史...');
       await ctx.forceCompress();
-      console.log("压缩完成！");
+      console.log('压缩完成！');
       const summary = ctx.getCompressedSummary();
       if (summary) {
         console.log(`摘要预览: ${summary.slice(0, 200)}...`);
@@ -297,7 +306,7 @@ async function handleChatCommand(
       break;
     }
 
-    case "/memory": {
+    case '/memory': {
       const memory = agent.getMemory();
       const short = memory.getAllShort();
       const long = await memory.getAllLong();
@@ -309,21 +318,23 @@ async function handleChatCommand(
       for (const e of long) {
         console.log(`  ${e.key}: ${e.value}`);
       }
-      console.log("");
+      console.log('');
       break;
     }
 
-    case "/skills": {
+    case '/skills': {
       const skills = agent.getSkills();
       const list = skills.listSkills();
       if (list.length === 0) {
-        console.log("暂无可用技能。在 _skills/ 目录下创建子目录和 SKILL.md 即可添加技能。");
+        console.log(
+          '暂无可用技能。在 _skills/ 目录下创建子目录和 SKILL.md 即可添加技能。',
+        );
       } else {
         console.log(`\n可用技能 (${list.length} 个):`);
         for (const s of list) {
           console.log(`  - ${s.name}: ${s.description}`);
         }
-        console.log("");
+        console.log('');
       }
       break;
     }
@@ -340,22 +351,22 @@ async function handleChatCommand(
  */
 async function sessionCommand(
   subcommand: string,
-  args: string[]
+  args: string[],
 ): Promise<void> {
   switch (subcommand) {
-    case "list":
+    case 'list':
       await listSessions();
       break;
-    case "tree":
+    case 'tree':
       if (args.length < 2) {
-        console.error("用法: session tree <sessionId> <runId>");
+        console.error('用法: session tree <sessionId> <runId>');
         process.exit(1);
       }
       await showSessionTree(args[0], args[1]);
       break;
     default:
       console.error(`未知 session 子命令: ${subcommand}`);
-      console.log("可用: list, tree");
+      console.log('可用: list, tree');
       process.exit(1);
   }
 }
@@ -369,28 +380,28 @@ async function main(): Promise<void> {
   const { command, args, flags } = parseArgs(process.argv.slice(2));
 
   switch (command) {
-    case "help":
-    case "--help":
-    case "-h":
+    case 'help':
+    case '--help':
+    case '-h':
       showHelp();
       break;
 
-    case "run":
+    case 'run':
       if (args.length === 0) {
-        console.error("请输入消息内容");
+        console.error('请输入消息内容');
         console.log('用法: npm run cli -- run "你的消息"');
         process.exit(1);
       }
-      await runCommand(args.join(" "), flags);
+      await runCommand(args.join(' '), flags);
       break;
 
-    case "chat":
+    case 'chat':
       await chatCommand(flags);
       break;
 
-    case "session":
+    case 'session':
       if (args.length === 0) {
-        console.error("用法: session list | session tree <sessionId> <runId>");
+        console.error('用法: session list | session tree <sessionId> <runId>');
         process.exit(1);
       }
       await sessionCommand(args[0], args.slice(1));
@@ -398,12 +409,12 @@ async function main(): Promise<void> {
 
     default:
       console.error(`未知命令: ${command}`);
-      console.log("输入 npm run cli -- help 查看帮助");
+      console.log('输入 npm run cli -- help 查看帮助');
       process.exit(1);
   }
 }
 
 main().catch((e) => {
-  console.error("运行出错:", e.message);
+  console.error('运行出错:', e.message);
   process.exit(1);
 });

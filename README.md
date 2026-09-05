@@ -88,12 +88,12 @@ cli.ts
         │     └── tools/
         │           ├── registry.ts (工具注册表 + zod→JSON Schema)
         │           └── builtin.ts (内置工具实现)
-        ├── sandbox.ts (本地沙箱)
-        ├── dockerSandbox.ts (Docker 沙箱)
+        ├── sandbox/sandbox.ts (本地沙箱)
+        ├── sandbox/dockerSandbox.ts (Docker 沙箱)
         ├── memory.ts (记忆系统 + 记忆工具)
-        ├── skills.ts (技能系统 + 技能工具)
-        ├── mcp.ts (远程 MCP 接入)
-        └── sessionView.ts (会话记录查看)
+        ├── skills/skills.ts (技能系统 + 技能工具)
+        ├── mcp/mcp.ts (远程 MCP 接入)
+        └── sessions/sessionView.ts (会话记录查看)
 ```
 
 ---
@@ -467,11 +467,16 @@ workspace/
 └── ...
 ```
 
-- **LocalSandbox**（默认）：直接在本地执行，适合开发调试
-- **DockerSandbox**：在 Docker 容器中隔离执行，更安全
+- **LocalSandbox**（默认）：直接在宿主机执行，适合本地开发调试，但不提供进程隔离
+- **DockerSandbox**：在容器中执行 shell 命令，只将当前会话目录挂载到 `/workspace`
   - 需要本地安装 Docker
   - 默认镜像：`node:22.12.0`
-  - workspace 目录挂载到容器 `/workspace`
+  - 禁用网络、Linux capabilities 和提权，并限制进程数、内存和 CPU
+  - `read_file` / `write_file` 的路径检查不等于进程隔离
+  - `run_shell` 可以访问宿主机上工作目录之外的文件
+  - 不要对不可信的 Prompt、MCP 或模型使用 `--sandbox local`
+
+Docker 只隔离 Agent 执行的 shell 命令；Agent 进程本身以及已配置的 MCP 服务仍运行在宿主机上。不要把 Docker socket、宿主机敏感目录或额外的 host mount 暴露给容器。若需要更强的生产级隔离，应使用独立虚拟机或专用 sandbox runtime。
 
 ---
 

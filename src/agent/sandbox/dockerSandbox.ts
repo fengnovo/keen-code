@@ -5,16 +5,16 @@
  * 文件读写直接在本地操作（workspace 目录已挂载到容器）
  */
 
-import { execFile } from "node:child_process";
-import { promises as fs } from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { Sandbox } from "./sandbox.js";
+import { execFile } from 'node:child_process';
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { Sandbox } from './sandbox.js';
 
 /** 默认 Docker 镜像 */
-const DEFAULT_IMAGE = "node:22.12.0";
+const DEFAULT_IMAGE = 'node:22.12.0';
 /** 容器名前缀 */
-const CONTAINER_PREFIX = "keen-code-";
+const CONTAINER_PREFIX = 'keen-code-';
 
 /**
  * Docker 沙箱
@@ -36,12 +36,12 @@ export class DockerSandbox implements Sandbox {
   constructor(workDir?: string, image?: string, sessionId?: string) {
     const __filename = fileURLToPath(import.meta.url);
     const __dirname = path.dirname(__filename);
-    const projectRoot = path.resolve(__dirname, "../..");
+    const projectRoot = path.resolve(__dirname, '../../..');
 
     if (workDir) {
       this.workDir = workDir;
     } else {
-      const base = path.join(projectRoot, "workspace");
+      const base = path.join(projectRoot, 'workspace');
       this.workDir = sessionId ? path.join(base, sessionId) : base;
     }
     this.image = image || DEFAULT_IMAGE;
@@ -61,30 +61,47 @@ export class DockerSandbox implements Sandbox {
     // 启动一个长驻容器
     await new Promise<void>((resolve, reject) => {
       execFile(
-        "docker",
+        'docker',
         [
-          "run",
-          "-d",               // 后台运行
-          "--name", this.containerName,
-          "-v", `${this.workDir}:/workspace`, // 挂载 workspace 目录
-          "-w", "/workspace",  // 设置容器内工作目录
-          "--rm",              // 停止后自动删除容器
+          'run',
+          '-d', // 后台运行
+          '--name',
+          this.containerName,
+          '--network',
+          'none', // Agent 不需要网络访问
+          '--cap-drop',
+          'ALL', // 不授予 Linux capabilities
+          '--security-opt',
+          'no-new-privileges:true',
+          '--pids-limit',
+          '256',
+          '--memory',
+          '1g',
+          '--cpus',
+          '2',
+          '--mount',
+          `type=bind,src=${this.workDir},dst=/workspace`, // 只挂载当前会话目录
+          '-w',
+          '/workspace', // 设置容器内工作目录
+          '--rm', // 停止后自动删除容器
           this.image,
-          "tail", "-f", "/dev/null", // 保持容器运行
+          'tail',
+          '-f',
+          '/dev/null', // 保持容器运行
         ],
         { timeout: 60000 },
         (error) => {
           if (error) {
             reject(
               new Error(
-                `启动 Docker 容器失败: ${error.message}\n请确认 Docker 已启动，且镜像 ${this.image} 可用`
-              )
+                `启动 Docker 容器失败: ${error.message}\n请确认 Docker 已启动，且镜像 ${this.image} 可用`,
+              ),
             );
           } else {
             this.containerStarted = true;
             resolve();
           }
-        }
+        },
       );
     });
   }
@@ -94,20 +111,14 @@ export class DockerSandbox implements Sandbox {
    * 通过 docker exec 在已启动的容器内执行
    */
   async runShell(
-    command: string
+    command: string,
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     await this.ensureContainer();
 
     return new Promise((resolve) => {
       execFile(
-        "docker",
-        [
-          "exec",
-          this.containerName,
-          "/bin/bash",
-          "-c",
-          command,
-        ],
+        'docker',
+        ['exec', this.containerName, '/bin/bash', '-c', command],
         {
           timeout: 30000,
           maxBuffer: 1024 * 1024,
@@ -118,7 +129,7 @@ export class DockerSandbox implements Sandbox {
             stderr,
             exitCode: error?.code ? Number(error.code) : error ? 1 : 0,
           });
-        }
+        },
       );
     });
   }
@@ -129,7 +140,9 @@ export class DockerSandbox implements Sandbox {
    */
   private resolvePath(relativePath: string): string {
     const resolved = path.resolve(this.workDir, relativePath);
-    const normalizedWorkDir = this.workDir.endsWith("/") ? this.workDir : this.workDir + "/";
+    const normalizedWorkDir = this.workDir.endsWith('/')
+      ? this.workDir
+      : this.workDir + '/';
     if (resolved !== this.workDir && !resolved.startsWith(normalizedWorkDir)) {
       throw new Error(`路径越界：${relativePath}`);
     }
@@ -139,14 +152,14 @@ export class DockerSandbox implements Sandbox {
   /** 读取工作目录内的文件（直接在本地读取） */
   async readFile(relativePath: string): Promise<string> {
     const fullPath = this.resolvePath(relativePath);
-    return fs.readFile(fullPath, "utf-8");
+    return fs.readFile(fullPath, 'utf-8');
   }
 
   /** 写入工作目录内的文件（直接在本地写入） */
   async writeFile(relativePath: string, content: string): Promise<void> {
     const fullPath = this.resolvePath(relativePath);
     await fs.mkdir(path.dirname(fullPath), { recursive: true });
-    await fs.writeFile(fullPath, content, "utf-8");
+    await fs.writeFile(fullPath, content, 'utf-8');
   }
 
   /** 获取工作目录绝对路径 */
@@ -159,13 +172,13 @@ export class DockerSandbox implements Sandbox {
     if (!this.containerStarted) return;
     return new Promise((resolve) => {
       execFile(
-        "docker",
-        ["rm", "-f", this.containerName],
+        'docker',
+        ['rm', '-f', this.containerName],
         { timeout: 10000 },
         () => {
           this.containerStarted = false;
           resolve();
-        }
+        },
       );
     });
   }

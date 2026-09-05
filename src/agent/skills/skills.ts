@@ -8,11 +8,11 @@
  * AI 可通过 use_skill 工具主动读取技能的完整说明
  */
 
-import { promises as fs } from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { Tool } from "./tools/registry.js";
-import { z } from "zod";
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { Tool } from '../tools/registry.js';
+import { z } from 'zod';
 
 /** 技能定义 */
 export interface Skill {
@@ -37,8 +37,8 @@ export class SkillManager {
   constructor() {
     const __filename = fileURLToPath(import.meta.url);
     const __dirname = path.dirname(__filename);
-    const projectRoot = path.resolve(__dirname, "../..");
-    this.skillsDir = path.join(projectRoot, "_skills");
+    const projectRoot = path.resolve(__dirname, '../..');
+    this.skillsDir = path.join(projectRoot, '_skills');
   }
 
   /**
@@ -54,9 +54,9 @@ export class SkillManager {
       for (const entry of entries) {
         if (!entry.isDirectory()) continue;
 
-        const skillPath = path.join(this.skillsDir, entry.name, "SKILL.md");
+        const skillPath = path.join(this.skillsDir, entry.name, 'SKILL.md');
         try {
-          const content = await fs.readFile(skillPath, "utf-8");
+          const content = await fs.readFile(skillPath, 'utf-8');
           const description = this.extractDescription(content);
           this.skills.set(entry.name, {
             name: entry.name,
@@ -77,29 +77,31 @@ export class SkillManager {
    * 取第一个非标题、非代码块的段落作为描述
    */
   private extractDescription(content: string): string {
-    const lines = content.split("\n");
+    const lines = content.split('\n');
     let inCodeBlock = false;
     const paragraphLines: string[] = [];
 
     for (const line of lines) {
       // 跳过代码块内容
-      if (line.startsWith("```")) {
+      if (line.startsWith('```')) {
         inCodeBlock = !inCodeBlock;
         continue;
       }
       if (inCodeBlock) continue;
       // 跳过标题行
-      if (line.startsWith("#")) continue;
+      if (line.startsWith('#')) continue;
       // 遇到空行时，如果已收集到段落内容就结束
-      if (line.trim() === "") {
+      if (line.trim() === '') {
         if (paragraphLines.length > 0) break;
         continue;
       }
       paragraphLines.push(line.trim());
     }
 
-    const desc = paragraphLines.join(" ");
-    return desc.length > 200 ? desc.slice(0, 200) + "..." : desc || "（暂无描述）";
+    const desc = paragraphLines.join(' ');
+    return desc.length > 200
+      ? desc.slice(0, 200) + '...'
+      : desc || '（暂无描述）';
   }
 
   /** 列出所有已加载的技能 */
@@ -118,14 +120,14 @@ export class SkillManager {
    */
   getSkillsSummary(): string {
     const skills = this.listSkills();
-    if (skills.length === 0) return "";
+    if (skills.length === 0) return '';
 
-    const parts = ["【可用技能】"];
+    const parts = ['【可用技能】'];
     for (const skill of skills) {
       parts.push(`- ${skill.name}: ${skill.description}`);
     }
-    parts.push("\n使用 use_skill 工具可读取技能的完整说明。");
-    return parts.join("\n");
+    parts.push('\n使用 use_skill 工具可读取技能的完整说明。');
+    return parts.join('\n');
   }
 }
 
@@ -134,10 +136,10 @@ export class SkillManager {
 /** use_skill 工具：读取指定技能的完整 SKILL.md 说明文档 */
 export function createUseSkillTool(skillManager: SkillManager): Tool {
   return {
-    name: "use_skill",
-    description: "读取指定技能的完整 SKILL.md 说明文档",
+    name: 'use_skill',
+    description: '读取指定技能的完整 SKILL.md 说明文档',
     schema: z.object({
-      name: z.string().describe("技能名称"),
+      name: z.string().describe('技能名称'),
     }),
     async execute(params: { name: string }) {
       const skill = skillManager.getSkill(params.name);

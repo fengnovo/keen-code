@@ -9,9 +9,9 @@
  * - finish：提交最终回答，结束任务
  */
 
-import { z } from "zod";
-import { Tool } from "./registry.js";
-import { Sandbox } from "../sandbox/sandbox.js";
+import { z } from 'zod';
+import { Tool } from './registry.js';
+import { Sandbox } from '../sandbox/sandbox.js';
 
 /**
  * run_shell 工具：在沙箱工作目录中执行 shell 命令
@@ -19,10 +19,10 @@ import { Sandbox } from "../sandbox/sandbox.js";
  */
 export function createRunShellTool(sandbox: Sandbox): Tool {
   return {
-    name: "run_shell",
-    description: "在沙箱工作目录中执行 shell 命令，返回命令输出",
+    name: 'run_shell',
+    description: '在沙箱工作目录中执行 shell 命令，返回命令输出',
     schema: z.object({
-      command: z.string().describe("要执行的 shell 命令"),
+      command: z.string().describe('要执行的 shell 命令'),
     }),
     async execute(params: { command: string }) {
       const result = await sandbox.runShell(params.command);
@@ -41,10 +41,10 @@ export function createRunShellTool(sandbox: Sandbox): Tool {
  */
 export function createReadFileTool(sandbox: Sandbox): Tool {
   return {
-    name: "read_file",
-    description: "读取沙箱工作目录内的文件内容",
+    name: 'read_file',
+    description: '读取沙箱工作目录内的文件内容',
     schema: z.object({
-      path: z.string().describe("文件路径，相对于工作目录"),
+      path: z.string().describe('文件路径，相对于工作目录'),
     }),
     async execute(params: { path: string }) {
       try {
@@ -63,11 +63,11 @@ export function createReadFileTool(sandbox: Sandbox): Tool {
  */
 export function createWriteFileTool(sandbox: Sandbox): Tool {
   return {
-    name: "write_file",
-    description: "向沙箱工作目录内的文件写入内容",
+    name: 'write_file',
+    description: '向沙箱工作目录内的文件写入内容',
     schema: z.object({
-      path: z.string().describe("文件路径，相对于工作目录"),
-      content: z.string().describe("要写入的文件内容"),
+      path: z.string().describe('文件路径，相对于工作目录'),
+      content: z.string().describe('要写入的文件内容'),
     }),
     async execute(params: { path: string; content: string }) {
       try {
@@ -86,10 +86,10 @@ export function createWriteFileTool(sandbox: Sandbox): Tool {
  */
 export function createFinishTool(): Tool {
   return {
-    name: "finish",
-    description: "提交最终回答，结束本次任务",
+    name: 'finish',
+    description: '提交最终回答，结束本次任务',
     schema: z.object({
-      answer: z.string().describe("最终的回答内容"),
+      answer: z.string().describe('最终的回答内容'),
     }),
     async execute(params: { answer: string }) {
       return { finished: true, answer: params.answer };

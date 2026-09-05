@@ -4,8 +4,8 @@
  * 两者都实现 LLMProvider 接口，通过 createLLM 工厂函数按需创建
  */
 
-import "dotenv/config";
-import OpenAI from "openai";
+import 'dotenv/config';
+import OpenAI from 'openai';
 import {
   ChatMessage,
   ToolDefinition,
@@ -13,7 +13,7 @@ import {
   LLMResponse,
   LLMProvider,
   ChatOptions,
-} from "./types.js";
+} from './types.js';
 
 // ---------- Mock LLM ----------
 /**
@@ -25,14 +25,14 @@ export class MockLLM implements LLMProvider {
   async chat(
     messages: ChatMessage[],
     tools: ToolDefinition[],
-    options?: ChatOptions
+    options?: ChatOptions,
   ): Promise<LLMResponse> {
     // 取最后一条用户消息作为输入
-    const lastUserMsg = [...messages].reverse().find((m) => m.role === "user");
-    const userInput = lastUserMsg?.content ?? "你好";
+    const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user');
+    const userInput = lastUserMsg?.content ?? '你好';
 
     // 构造模拟回复
-    const content = `[Mock LLM] 收到你的消息："${userInput}"\n\n我是一个模拟的 AI 助手。当前有 ${tools.length} 个工具可用：${tools.map((t) => t.name).join(", ")}。`;
+    const content = `[Mock LLM] 收到你的消息："${userInput}"\n\n我是一个模拟的 AI 助手。当前有 ${tools.length} 个工具可用：${tools.map((t) => t.name).join(', ')}。`;
 
     // 如果传入了流式回调，逐字模拟输出
     if (options?.onToken) {
@@ -64,24 +64,24 @@ export class DeepSeekLLM implements LLMProvider {
     const baseURL = process.env.DEEPSEEK_BASE_URL;
     const model = process.env.DEEPSEEK_MODEL;
 
-    if (!apiKey || apiKey === "你的key") {
+    if (!apiKey || apiKey === '你的key') {
       throw new Error(
-        "请在 .env 中配置 DEEPSEEK_API_KEY，或使用 --mock 模式运行"
+        '请在 .env 中配置 DEEPSEEK_API_KEY，或使用 --mock 模式运行',
       );
     }
 
     this.client = new OpenAI({ apiKey, baseURL });
-    this.model = model || "deepseek-v4-flash";
+    this.model = model || 'deepseek-v4-flash';
   }
 
   async chat(
     messages: ChatMessage[],
     tools: ToolDefinition[],
-    options?: ChatOptions
+    options?: ChatOptions,
   ): Promise<LLMResponse> {
     // 将内部工具定义转换为 OpenAI function-calling 格式
     const openaiTools = tools.map((t) => ({
-      type: "function" as const,
+      type: 'function' as const,
       function: {
         name: t.name,
         description: t.description,
@@ -96,10 +96,10 @@ export class DeepSeekLLM implements LLMProvider {
         content: m.content,
       };
       // assistant 消息需要携带 tool_calls
-      if (m.role === "assistant" && m.tool_calls?.length) {
+      if (m.role === 'assistant' && m.tool_calls?.length) {
         msg.tool_calls = m.tool_calls.map((tc) => ({
           id: tc.id,
-          type: "function",
+          type: 'function',
           function: {
             name: tc.name,
             arguments: JSON.stringify(tc.arguments),
@@ -107,24 +107,28 @@ export class DeepSeekLLM implements LLMProvider {
         }));
       }
       // tool 消息需要携带 tool_call_id
-      if (m.role === "tool") {
+      if (m.role === 'tool') {
         msg.tool_call_id = m.tool_call_id;
       }
       return msg;
     });
 
     // --- 流式调用 ---
-    let content = "";
+    let content = '';
     // 工具调用在流式中是分块返回的，需要按 index 累积
-    const toolCallMap = new Map<number, { id: string; name: string; args: string }>();
+    const toolCallMap = new Map<
+      number,
+      { id: string; name: string; args: string }
+    >();
     let streamFailed = false;
 
     try {
       const stream = await this.client.chat.completions.create({
         model: this.model,
-        messages: openaiMessages as unknown as OpenAI.Chat.ChatCompletionMessageParam[],
+        messages:
+          openaiMessages as unknown as OpenAI.Chat.ChatCompletionMessageParam[],
         tools: openaiTools.length > 0 ? openaiTools : undefined,
-        tool_choice: openaiTools.length > 0 ? "auto" : undefined,
+        tool_choice: openaiTools.length > 0 ? 'auto' : undefined,
         stream: true,
       });
 
@@ -146,7 +150,7 @@ export class DeepSeekLLM implements LLMProvider {
           for (const tc of delta.tool_calls) {
             const idx = tc.index;
             if (!toolCallMap.has(idx)) {
-              toolCallMap.set(idx, { id: tc.id || "", name: "", args: "" });
+              toolCallMap.set(idx, { id: tc.id || '', name: '', args: '' });
             }
             const entry = toolCallMap.get(idx)!;
             if (tc.id) entry.id = tc.id;
@@ -161,9 +165,12 @@ export class DeepSeekLLM implements LLMProvider {
         streamFailed = true;
       } else {
         // 部分内容已收到，但工具调用信息不完整时也回退
-        if (toolCallMap.size > 0 && !Array.from(toolCallMap.values()).every(e => e.id && e.name)) {
+        if (
+          toolCallMap.size > 0 &&
+          !Array.from(toolCallMap.values()).every((e) => e.id && e.name)
+        ) {
           streamFailed = true;
-          content = "";
+          content = '';
           toolCallMap.clear();
         }
       }
@@ -173,15 +180,16 @@ export class DeepSeekLLM implements LLMProvider {
     if (streamFailed) {
       const response = await this.client.chat.completions.create({
         model: this.model,
-        messages: openaiMessages as unknown as OpenAI.Chat.ChatCompletionMessageParam[],
+        messages:
+          openaiMessages as unknown as OpenAI.Chat.ChatCompletionMessageParam[],
         tools: openaiTools.length > 0 ? openaiTools : undefined,
-        tool_choice: openaiTools.length > 0 ? "auto" : undefined,
+        tool_choice: openaiTools.length > 0 ? 'auto' : undefined,
       });
 
       const choice = response.choices[0];
       const message = choice.message;
 
-      content = message.content || "";
+      content = message.content || '';
 
       // 非流式模式下，一次性输出全部内容
       if (options?.onToken && content) {
@@ -194,7 +202,7 @@ export class DeepSeekLLM implements LLMProvider {
           toolCallMap.set(toolCallMap.size, {
             id: tc.id,
             name: tc.function.name,
-            args: tc.function.arguments || "{}",
+            args: tc.function.arguments || '{}',
           });
         }
       }
@@ -207,7 +215,7 @@ export class DeepSeekLLM implements LLMProvider {
         tool_calls.push({
           id: entry.id,
           name: entry.name,
-          arguments: JSON.parse(entry.args || "{}"),
+          arguments: JSON.parse(entry.args || '{}'),
         });
       } catch {
         // JSON 解析失败，把原始字符串存入 raw 字段

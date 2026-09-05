@@ -11,20 +11,20 @@
  * 注："trace" 这个词预留给评测（eval）记录使用
  */
 
-import { promises as fs } from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 /** 会话事件类型 */
 export type SessionEventType =
-  | "turn_start"       // 一轮对话开始
-  | "llm_call"         // LLM 调用
-  | "llm_response"     // LLM 响应
-  | "tool_call"        // 工具调用
-  | "tool_result"      // 工具结果
-  | "turn_end"         // 一轮对话结束
-  | "session_start"    // 会话开始
-  | "session_end";     // 会话结束
+  | 'turn_start' // 一轮对话开始
+  | 'llm_call' // LLM 调用
+  | 'llm_response' // LLM 响应
+  | 'tool_call' // 工具调用
+  | 'tool_result' // 工具结果
+  | 'turn_end' // 一轮对话结束
+  | 'session_start' // 会话开始
+  | 'session_end'; // 会话结束
 
 /** 会话事件结构 */
 export interface SessionEvent {
@@ -51,14 +51,14 @@ export class SessionRecorder {
   private currentTurn: number = 0;
 
   constructor(sessionId?: string, runId?: string) {
-    this.sessionId = sessionId || this.generateId("sess");
-    this.runId = runId || this.generateId("run");
+    this.sessionId = sessionId || this.generateId('sess');
+    this.runId = runId || this.generateId('run');
 
     // 定位 sessions 目录
     const __filename = fileURLToPath(import.meta.url);
     const __dirname = path.dirname(__filename);
-    const projectRoot = path.resolve(__dirname, "../..");
-    this.sessionDir = path.join(projectRoot, "_sessions", this.sessionId);
+    const projectRoot = path.resolve(__dirname, '../..');
+    this.sessionDir = path.join(projectRoot, '_sessions', this.sessionId);
     this.filePath = path.join(this.sessionDir, `${this.runId}.jsonl`);
   }
 
@@ -75,8 +75,8 @@ export class SessionRecorder {
   /** 写入一条会话事件到 JSONL 文件 */
   private async writeEvent(event: SessionEvent): Promise<void> {
     await this.ensureDir();
-    const line = JSON.stringify(event) + "\n";
-    await fs.appendFile(this.filePath, line, "utf-8");
+    const line = JSON.stringify(event) + '\n';
+    await fs.appendFile(this.filePath, line, 'utf-8');
   }
 
   // ---------- 公共记录方法 ----------
@@ -85,7 +85,7 @@ export class SessionRecorder {
   async sessionStart(userInput: string): Promise<void> {
     await this.writeEvent({
       timestamp: new Date().toISOString(),
-      type: "session_start",
+      type: 'session_start',
       turnId: 0,
       data: { userInput, sessionId: this.sessionId, runId: this.runId },
     });
@@ -95,7 +95,7 @@ export class SessionRecorder {
   async sessionEnd(finalAnswer: string): Promise<void> {
     await this.writeEvent({
       timestamp: new Date().toISOString(),
-      type: "session_end",
+      type: 'session_end',
       turnId: this.currentTurn,
       data: { finalAnswer },
     });
@@ -106,7 +106,7 @@ export class SessionRecorder {
     this.currentTurn = turnId;
     await this.writeEvent({
       timestamp: new Date().toISOString(),
-      type: "turn_start",
+      type: 'turn_start',
       turnId,
       data: {},
     });
@@ -116,11 +116,11 @@ export class SessionRecorder {
   async llmCall(
     turnId: number,
     messages: unknown[],
-    tools: string[]
+    tools: string[],
   ): Promise<void> {
     await this.writeEvent({
       timestamp: new Date().toISOString(),
-      type: "llm_call",
+      type: 'llm_call',
       turnId,
       data: { messageCount: messages.length, tools },
     });
@@ -130,11 +130,11 @@ export class SessionRecorder {
   async llmResponse(
     turnId: number,
     content: string | null,
-    toolCallCount: number
+    toolCallCount: number,
   ): Promise<void> {
     await this.writeEvent({
       timestamp: new Date().toISOString(),
-      type: "llm_response",
+      type: 'llm_response',
       turnId,
       data: {
         content: content?.slice(0, 500) ?? null,
@@ -145,21 +145,29 @@ export class SessionRecorder {
   }
 
   /** 记录工具调用（工具名、参数） */
-  async toolCall(turnId: number, toolName: string, args: unknown): Promise<void> {
+  async toolCall(
+    turnId: number,
+    toolName: string,
+    args: unknown,
+  ): Promise<void> {
     await this.writeEvent({
       timestamp: new Date().toISOString(),
-      type: "tool_call",
+      type: 'tool_call',
       turnId,
       data: { toolName, args },
     });
   }
 
   /** 记录工具结果（结果前 1000 字符、结果长度） */
-  async toolResult(turnId: number, toolName: string, result: unknown): Promise<void> {
+  async toolResult(
+    turnId: number,
+    toolName: string,
+    result: unknown,
+  ): Promise<void> {
     const resultStr = JSON.stringify(result);
     await this.writeEvent({
       timestamp: new Date().toISOString(),
-      type: "tool_result",
+      type: 'tool_result',
       turnId,
       data: {
         toolName,
@@ -173,7 +181,7 @@ export class SessionRecorder {
   async turnEnd(turnId: number, output: string): Promise<void> {
     await this.writeEvent({
       timestamp: new Date().toISOString(),
-      type: "turn_end",
+      type: 'turn_end',
       turnId,
       data: { output: output.slice(0, 500), outputLength: output.length },
     });

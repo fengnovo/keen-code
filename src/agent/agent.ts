@@ -14,35 +14,35 @@
  * 9. 组装成 AgentRun 实例
  */
 
-import "dotenv/config";
-import { createLLM } from "./llm.js";
-import { LocalSandbox, Sandbox } from "./sandbox/sandbox.js";
-import { DockerSandbox } from "./sandbox/dockerSandbox.js"; 
-import { MemoryManager } from "./memory.js";
-import { SkillManager } from "./skills.js";
-import { SessionRecorder } from "./sessions/session.js";
-import { ToolRegistry } from "./tools/registry.js";
+import 'dotenv/config';
+import { createLLM } from './llm.js';
+import { LocalSandbox, Sandbox } from './sandbox/sandbox.js';
+import { DockerSandbox } from './sandbox/dockerSandbox.js';
+import { MemoryManager } from './memory.js';
+import { SkillManager } from './skills/skills.js';
+import { SessionRecorder } from './sessions/session.js';
+import { ToolRegistry } from './tools/registry.js';
 import {
   createRunShellTool,
   createReadFileTool,
   createWriteFileTool,
   createFinishTool,
-} from "./tools/builtin.js";
+} from './tools/builtin.js';
 import {
   createRememberShortTool,
   createRememberLongTool,
   createRecallTool,
-} from "./memory.js";
-import { createUseSkillTool } from "./skills.js";
-import { connectMCP } from "./mcp/mcp.js";
-import { AgentRun } from "./loop.js";
+} from './memory.js';
+import { createUseSkillTool } from './skills/skills.js';
+import { connectMCP } from './mcp/mcp.js';
+import { AgentRun } from './loop.js';
 
 /** 创建 Agent 的配置选项 */
 export interface CreateAgentOptions {
   /** 使用 Mock LLM（不调用真实 API） */
   mock?: boolean;
   /** 沙箱类型：local（默认）或 docker */
-  sandboxType?: "local" | "docker";
+  sandboxType?: 'local' | 'docker';
   /** 远程 MCP 服务配置：{ 名称: URL } */
   mcpServers?: Record<string, string>;
   /** 自定义会话 ID（不传则自动生成） */
@@ -68,18 +68,22 @@ export interface CreateAgentResult {
  * @param options 配置选项
  * @returns Agent 实例和关联资源
  */
-export async function createAgent(options: CreateAgentOptions = {}): Promise<CreateAgentResult> {
+export async function createAgent(
+  options: CreateAgentOptions = {},
+): Promise<CreateAgentResult> {
   const mock = options.mock ?? false;
   const mcpClients: unknown[] = [];
   // 生成会话 ID（如果未传入）
-  const sessionId = options.sessionId || `sess_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const sessionId =
+    options.sessionId ||
+    `sess_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
   // 1. 创建 LLM 实例
   const llm = createLLM(mock);
 
   // 2. 创建沙箱（按会话隔离工作目录：workspace/<sessionId>/）
   let sandbox: Sandbox;
-  if (options.sandboxType === "docker") {
+  if (options.sandboxType === 'docker') {
     sandbox = new DockerSandbox(undefined, undefined, sessionId);
   } else {
     sandbox = new LocalSandbox(undefined, sessionId);
@@ -136,7 +140,7 @@ export async function createAgent(options: CreateAgentOptions = {}): Promise<Cre
       skills,
       recorder,
     },
-    toolRegistry
+    toolRegistry,
   );
 
   return { agent, mcpClients, sandbox, sessionId };

@@ -5,7 +5,7 @@
  */
 
 /** 聊天消息角色类型 */
-export type ChatRole = "system" | "user" | "assistant" | "tool";
+export type ChatRole = 'system' | 'user' | 'assistant' | 'tool';
 
 /** 聊天消息，对应 OpenAI 消息格式 */
 export interface ChatMessage {
@@ -80,6 +80,6 @@ export interface LLMProvider {
   chat(
     messages: ChatMessage[],
     tools: ToolDefinition[],
-    options?: ChatOptions
+    options?: ChatOptions,
   ): Promise<LLMResponse>;
 }

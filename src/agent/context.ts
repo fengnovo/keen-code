@@ -10,7 +10,7 @@
  * 这样可以在保持关键信息的同时，控制传给 LLM 的消息数量
  */
 
-import { ChatMessage, LLMProvider } from "./types.js";
+import { ChatMessage, LLMProvider } from './types.js';
 
 /** 超过 20 轮对话触发压缩 */
 const MAX_TURNS_BEFORE_COMPRESS = 20;
@@ -27,12 +27,12 @@ export class ContextManager {
   /** LLM 实例，用于生成压缩摘要 */
   private llm: LLMProvider;
   /** 压缩后的历史摘要 */
-  private compressedSummary: string = "";
+  private compressedSummary: string = '';
 
   constructor(llm: LLMProvider, systemPrompt?: string) {
     this.llm = llm;
     if (systemPrompt) {
-      this.messages.push({ role: "system", content: systemPrompt });
+      this.messages.push({ role: 'system', content: systemPrompt });
     }
   }
 
@@ -55,9 +55,9 @@ export class ContextManager {
     let inserted = false;
     for (const msg of this.messages) {
       result.push(msg);
-      if (msg.role === "system" && !inserted) {
+      if (msg.role === 'system' && !inserted) {
         result.push({
-          role: "system",
+          role: 'system',
           content: `【对话历史摘要】\n${this.compressedSummary}`,
         });
         inserted = true;
@@ -68,7 +68,7 @@ export class ContextManager {
 
   /** 计算当前有多少轮用户-助手对话（按 user 消息数计算） */
   private countTurns(): number {
-    return this.messages.filter((m) => m.role === "user").length;
+    return this.messages.filter((m) => m.role === 'user').length;
   }
 
   /**
@@ -96,7 +96,7 @@ export class ContextManager {
     const conversationMsgs: ChatMessage[] = [];
 
     for (const msg of this.messages) {
-      if (msg.role === "system") {
+      if (msg.role === 'system') {
         systemMsgs.push(msg);
       } else {
         conversationMsgs.push(msg);
@@ -107,7 +107,10 @@ export class ContextManager {
     const keepCount = KEEP_RECENT_TURNS * 3;
     if (conversationMsgs.length <= keepCount) return;
 
-    const toCompress = conversationMsgs.slice(0, conversationMsgs.length - keepCount);
+    const toCompress = conversationMsgs.slice(
+      0,
+      conversationMsgs.length - keepCount,
+    );
     const toKeep = conversationMsgs.slice(conversationMsgs.length - keepCount);
 
     // 构造压缩请求，让 LLM 把旧对话总结为摘要
@@ -123,11 +126,11 @@ ${this.formatMessagesForSummary(toCompress)}
 `.trim();
 
     const summaryResponse = await this.llm.chat(
-      [{ role: "user", content: compressPrompt }],
-      [] // 压缩请求不需要工具
+      [{ role: 'user', content: compressPrompt }],
+      [], // 压缩请求不需要工具
     );
 
-    const newSummary = summaryResponse.content || "（摘要生成失败）";
+    const newSummary = summaryResponse.content || '（摘要生成失败）';
 
     // 如果之前已有摘要，追加合并
     if (this.compressedSummary) {
@@ -147,20 +150,20 @@ ${this.formatMessagesForSummary(toCompress)}
     return messages
       .map((m) => {
         const role = m.role.toUpperCase();
-        let content = m.content || "";
+        let content = m.content || '';
         // assistant 消息的工具调用信息也要包含
         if (m.tool_calls?.length) {
           content += `\n[工具调用] ${m.tool_calls
             .map((tc) => `${tc.name}(${JSON.stringify(tc.arguments)})`)
-            .join("; ")}`;
+            .join('; ')}`;
         }
         // tool 消息标注工具名
-        if (m.role === "tool") {
+        if (m.role === 'tool') {
           return `[TOOL RESULT ${m.name || m.tool_call_id}]: ${content.slice(0, 500)}`;
         }
         return `[${role}]: ${content}`;
       })
-      .join("\n\n");
+      .join('\n\n');
   }
 
   /** 手动触发压缩（chat 模式下 /compress 命令用） */
