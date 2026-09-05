@@ -15,7 +15,7 @@ import { SessionEvent } from './session.js';
 // 定位 sessions 根目录
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const projectRoot = path.resolve(__dirname, '../..');
+const projectRoot = path.resolve(__dirname, '../../..');
 const sessionsRoot = path.join(projectRoot, '_sessions');
 
 /**
@@ -81,6 +81,70 @@ export async function listSessions(): Promise<void> {
     }
   } catch (e) {
     console.error('读取会话列表失败:', (e as Error).message);
+  }
+}
+
+/** 列出指定 session 中的对话输入摘要 */
+export async function listSessionLogs(sessionId: string): Promise<void> {
+  const sessionDir = path.join(sessionsRoot, sessionId);
+
+  try {
+    const files = (await fs.readdir(sessionDir))
+      .filter((fileName) => fileName.endsWith('.jsonl'))
+      .sort();
+    const conversations: { timestamp: string; input: string }[] = [];
+
+    for (const fileName of files) {
+      const content = await fs.readFile(
+        path.join(sessionDir, fileName),
+        'utf-8',
+      );
+      const events: SessionEvent[] = [];
+      for (const line of content.split('\n').filter(Boolean)) {
+        try {
+          events.push(JSON.parse(line) as SessionEvent);
+        } catch {
+          // 忽略损坏的 JSONL 行，继续读取其他对话
+        }
+      }
+
+      const turnEvents = events.filter((event) => event.type === 'turn_start');
+      const inputEvents =
+        turnEvents.length > 0
+          ? turnEvents
+          : events.filter((event) => event.type === 'session_start');
+      for (const event of inputEvents) {
+        const userInput = event.data.userInput;
+        if (typeof userInput === 'string' && userInput.trim()) {
+          conversations.push({
+            timestamp: event.timestamp,
+            input: userInput.replace(/\s+/g, ' ').trim(),
+          });
+        }
+      }
+    }
+
+    conversations.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+    console.log(`=== 当前会话对话列表: ${sessionId} ===`);
+    if (conversations.length === 0) {
+      console.log('暂无对话记录');
+      return;
+    }
+
+    conversations.forEach((conversation, index) => {
+      const preview = conversation.input.slice(0, 20);
+      const suffix = conversation.input.length > 20 ? '...' : '';
+      const time = new Date(conversation.timestamp).toLocaleString();
+      console.log(`${index + 1}. [${time}] ${preview}${suffix}`);
+    });
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      console.log(`=== 当前会话对话列表: ${sessionId} ===`);
+      console.log('暂无对话记录');
+      return;
+    }
+    console.error(`读取会话日志失败: ${sessionId}`);
+    console.log((error as Error).message);
   }
 }
 

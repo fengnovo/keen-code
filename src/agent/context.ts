@@ -41,6 +41,12 @@ export class ContextManager {
     this.messages.push(message);
   }
 
+  /** 替换当前消息历史，用于恢复已有会话 */
+  replaceMessages(messages: ChatMessage[]): void {
+    this.messages = [...messages];
+    this.compressedSummary = '';
+  }
+
   /**
    * 获取所有消息（如果有压缩摘要，插入到 system prompt 之后）
    * 这样 LLM 既能看到压缩摘要，又能看到最近的完整对话

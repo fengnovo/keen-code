@@ -13,11 +13,16 @@
 
 import 'dotenv/config';
 import { createAgent, CreateAgentResult } from './agent/agent.js';
-import { listSessions, showSessionTree } from './agent/sessions/sessionView.js';
+import {
+  listSessions,
+  listSessionLogs,
+  showSessionTree,
+} from './agent/sessions/sessionView.js';
 import { parseMCPArgs } from './agent/mcp/mcp.js';
 import { DockerSandbox } from './agent/sandbox/dockerSandbox.js';
 import { AgentRun } from './agent/loop.js';
 import { ToolCall, RunCallbacks } from './agent/types.js';
+import { LoadingIndicator } from './utils/loading.js';
 import * as readline from 'node:readline';
 
 /**
@@ -55,17 +60,28 @@ function formatToolResult(toolName: string, result: unknown): string {
  * - onToolCall：显示工具调用信息
  * - onToolResult：显示工具执行结果
  */
-function createRunCallbacks(): RunCallbacks {
+function createRunCallbacks(loading: LoadingIndicator): RunCallbacks {
+  let responseStarted = false;
+
   return {
     onToken: (delta: string) => {
+      loading.stop();
+      if (!responseStarted) {
+        process.stdout.write('AI> ');
+        responseStarted = true;
+      }
       process.stdout.write(delta);
     },
     onToolCall: (toolCall: ToolCall) => {
+      loading.stop();
       process.stdout.write(`\n  [工具调用] ${formatToolCall(toolCall)}\n`);
+      loading.start('工具执行中');
     },
     onToolResult: (toolName: string, result: unknown) => {
+      loading.stop();
       const formatted = formatToolResult(toolName, result);
       process.stdout.write(`  [工具结果] ${formatted}\n\n`);
+      loading.start('AI 思考中');
     },
   };
 }
@@ -166,8 +182,13 @@ async function runCommand(
   console.log(`[工作目录: ${sandbox.getWorkDir()}]\n`);
 
   // 流式输出 AI 回答
-  process.stdout.write('AI> ');
-  const answer = await agent.run(message, createRunCallbacks());
+  const loading = new LoadingIndicator();
+  loading.start('AI 思考中');
+  try {
+    await agent.run(message, createRunCallbacks(loading));
+  } finally {
+    loading.stop();
+  }
   console.log('\n');
 
   const recorder = agent.getRecorder();
@@ -191,18 +212,18 @@ async function chatCommand(
   const sandboxType = (flags.sandbox as string) || 'local';
   const mcpServers = parseMCPArgs((flags.mcp as string[]) || []);
 
-  const { agent, sandbox, sessionId } = await createAgent({
+  let current = await createAgent({
     mock,
     sandboxType: sandboxType as 'local' | 'docker',
     mcpServers,
   });
 
-  const recorder = agent.getRecorder();
+  const recorder = current.agent.getRecorder();
   console.log('=== keen-code chat 模式 ===');
   console.log('输入 /exit 退出，/help 查看内置命令');
   console.log(`Session: ${recorder.getSessionId()}`);
   console.log(`Run:   ${recorder.getRunId()}`);
-  console.log(`工作目录: ${sandbox.getWorkDir()}`);
+  console.log(`工作目录: ${current.sandbox.getWorkDir()}`);
   console.log('');
 
   // 创建 readline 交互
@@ -211,8 +232,20 @@ async function chatCommand(
     output: process.stdout,
     prompt: '你> ',
   });
+  let isClosing = false;
+  let activeRequest: AbortController | undefined;
 
   rl.prompt();
+
+  const handleSigint = (): void => {
+    if (activeRequest && !activeRequest.signal.aborted) {
+      activeRequest.abort();
+      console.log('\n已暂停当前请求，再次按 Ctrl+C 退出。');
+    } else {
+      rl.close();
+    }
+  };
+  process.on('SIGINT', handleSigint);
 
   rl.on('line', async (line) => {
     const input = line.trim();
@@ -221,29 +254,67 @@ async function chatCommand(
       return;
     }
 
-    // 处理内置命令（以 / 开头）
-    if (input.startsWith('/')) {
-      await handleChatCommand(input, agent, rl);
-      rl.prompt();
-      return;
-    }
+    // Agent 运行期间暂停 readline，避免流式输出与当前输入提示互相覆盖
+    rl.pause();
+    readline.clearLine(process.stdout, 0);
+    readline.cursorTo(process.stdout, 0);
 
-    // 正常对话（流式输出 + 工具调用展示）
-    process.stdout.write('AI> ');
+    let requestController: AbortController | undefined;
     try {
-      await agent.run(input, createRunCallbacks());
+      // 处理内置命令（以 / 开头）
+      if (input.startsWith('/')) {
+        const switched = await handleChatCommand(input, current.agent, rl, {
+          mock,
+          sandboxType: sandboxType as 'local' | 'docker',
+          mcpServers,
+        });
+        if (switched) {
+          if (current.sandbox instanceof DockerSandbox) {
+            await current.sandbox.destroy();
+          }
+          current = switched;
+          console.log(`已切换到会话: ${current.sessionId}`);
+          console.log(`工作目录: ${current.sandbox.getWorkDir()}`);
+        }
+        return;
+      }
+
+      // 正常对话（流式输出 + 工具调用展示）
+      const loading = new LoadingIndicator();
+      loading.start('AI 思考中');
+      requestController = new AbortController();
+      activeRequest = requestController;
+      try {
+        await current.agent.run(
+          input,
+          createRunCallbacks(loading),
+          requestController.signal,
+        );
+      } finally {
+        if (activeRequest === requestController) activeRequest = undefined;
+        loading.stop();
+      }
       console.log('\n');
     } catch (e: unknown) {
-      console.error(`\n错误: ${(e as Error).message}\n`);
+      if (requestController?.signal.aborted) {
+        console.log('请求已暂停。');
+      } else {
+        console.error(`\n错误: ${(e as Error).message}\n`);
+      }
+    } finally {
+      if (!isClosing) {
+        rl.resume();
+        rl.prompt();
+      }
     }
-
-    rl.prompt();
   });
 
   rl.on('close', async () => {
+    isClosing = true;
+    process.removeListener('SIGINT', handleSigint);
     // 退出时清理 Docker 容器
-    if (sandbox instanceof DockerSandbox) {
-      await sandbox.destroy();
+    if (current.sandbox instanceof DockerSandbox) {
+      await current.sandbox.destroy();
     }
     console.log('\n再见！');
     process.exit(0);
@@ -258,7 +329,12 @@ async function handleChatCommand(
   input: string,
   agent: AgentRun,
   rl: readline.Interface,
-): Promise<void> {
+  options: {
+    mock: boolean;
+    sandboxType: 'local' | 'docker';
+    mcpServers: Record<string, string>;
+  },
+): Promise<CreateAgentResult | undefined> {
   const parts = input.split(/\s+/);
   const cmd = parts[0];
 
@@ -273,11 +349,15 @@ async function handleChatCommand(
 内置命令:
   /exit              退出
   /session            查看当前会话记录路径
+  /session <sid>      切换到指定会话并恢复历史
   /session list       列出所有会话
   /session tree <sid> <rid>  查看某个 run 的树状结构
+  /log                查看当前会话的对话列表
   /compress          手动压缩对话历史
   /memory            查看当前记忆
   /skills            列出可用技能
+
+对话进行中按 Ctrl+C 暂停当前请求，再按一次 Ctrl+C 退出
 `.trim(),
       );
       break;
@@ -287,12 +367,22 @@ async function handleChatCommand(
         await listSessions();
       } else if (parts[1] === 'tree' && parts[2] && parts[3]) {
         await showSessionTree(parts[2], parts[3]);
+      } else if (parts[1]) {
+        return createAgent({
+          ...options,
+          sessionId: parts[1],
+          resumeSession: true,
+        });
       } else {
         const recorder = agent.getRecorder();
         console.log(`当前会话记录: ${recorder.getFilePath()}`);
       }
       break;
     }
+
+    case '/log':
+      await listSessionLogs(agent.getRecorder().getSessionId());
+      break;
 
     case '/compress': {
       const ctx = agent.getContextManager();

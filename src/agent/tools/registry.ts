@@ -22,7 +22,7 @@ export interface Tool<TParams = unknown, TReturn = unknown> {
   /** Zod 参数 schema（用于校验和生成 JSON Schema） */
   schema: ZodSchema<TParams>;
   /** 执行函数 */
-  execute(params: TParams): Promise<TReturn>;
+  execute(params: TParams, signal?: AbortSignal): Promise<TReturn>;
 }
 
 // ---------- 工具注册表 ----------
@@ -79,7 +79,11 @@ export class ToolRegistry {
    * 先用 Zod schema 校验参数，校验通过后执行
    * @throws 参数校验失败或工具不存在时抛出异常
    */
-  async execute(name: string, args: Record<string, unknown>): Promise<unknown> {
+  async execute(
+    name: string,
+    args: Record<string, unknown>,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
     const tool = this.tools.get(name);
     if (!tool) {
       throw new Error(`未知工具：${name}`);
@@ -95,7 +99,7 @@ export class ToolRegistry {
       );
     }
 
-    return tool.execute(result.data);
+    return tool.execute(result.data, signal);
   }
 }
 

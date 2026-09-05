@@ -14,6 +14,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ChatMessage } from '../types.js';
 
 /** 会话事件类型 */
 export type SessionEventType =
@@ -38,6 +39,54 @@ export interface SessionEvent {
   data: Record<string, unknown>;
 }
 
+/** 从 JSONL 会话记录中恢复可供 LLM 使用的基础对话历史 */
+export async function loadSessionMessages(
+  sessionId: string,
+): Promise<ChatMessage[]> {
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = path.dirname(__filename);
+  const projectRoot = path.resolve(__dirname, '../../..');
+  const sessionDir = path.join(projectRoot, '_sessions', sessionId);
+
+  let fileNames: string[];
+  try {
+    fileNames = (await fs.readdir(sessionDir)).filter((name) =>
+      name.endsWith('.jsonl'),
+    );
+  } catch {
+    return [];
+  }
+
+  const events: SessionEvent[] = [];
+  for (const fileName of fileNames) {
+    const content = await fs.readFile(path.join(sessionDir, fileName), 'utf-8');
+    for (const line of content.split('\n').filter(Boolean)) {
+      try {
+        events.push(JSON.parse(line) as SessionEvent);
+      } catch {
+        // 忽略不完整的 JSONL 行，避免单条损坏记录阻止恢复整个会话
+      }
+    }
+  }
+
+  events.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+  const messages: ChatMessage[] = [];
+  for (const event of events) {
+    if (
+      event.type === 'turn_start' &&
+      typeof event.data.userInput === 'string'
+    ) {
+      messages.push({ role: 'user', content: event.data.userInput });
+    } else if (
+      event.type === 'turn_end' &&
+      typeof event.data.output === 'string'
+    ) {
+      messages.push({ role: 'assistant', content: event.data.output });
+    }
+  }
+  return messages;
+}
+
 /**
  * SessionRecorder - 会话记录器
  * 负责将执行事件写入 JSONL 文件
@@ -57,7 +106,7 @@ export class SessionRecorder {
     // 定位 sessions 目录
     const __filename = fileURLToPath(import.meta.url);
     const __dirname = path.dirname(__filename);
-    const projectRoot = path.resolve(__dirname, '../..');
+    const projectRoot = path.resolve(__dirname, '../../..');
     this.sessionDir = path.join(projectRoot, '_sessions', this.sessionId);
     this.filePath = path.join(this.sessionDir, `${this.runId}.jsonl`);
   }
@@ -102,13 +151,13 @@ export class SessionRecorder {
   }
 
   /** 记录一轮对话开始 */
-  async turnStart(turnId: number): Promise<void> {
+  async turnStart(turnId: number, userInput?: string): Promise<void> {
     this.currentTurn = turnId;
     await this.writeEvent({
       timestamp: new Date().toISOString(),
       type: 'turn_start',
       turnId,
-      data: {},
+      data: userInput === undefined ? {} : { userInput },
     });
   }
 

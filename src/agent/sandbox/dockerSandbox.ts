@@ -112,6 +112,7 @@ export class DockerSandbox implements Sandbox {
    */
   async runShell(
     command: string,
+    signal?: AbortSignal,
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     await this.ensureContainer();
 
@@ -122,6 +123,7 @@ export class DockerSandbox implements Sandbox {
         {
           timeout: 30000,
           maxBuffer: 1024 * 1024,
+          signal,
         },
         (error, stdout, stderr) => {
           resolve({

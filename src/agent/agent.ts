@@ -21,6 +21,7 @@ import { DockerSandbox } from './sandbox/dockerSandbox.js';
 import { MemoryManager } from './memory.js';
 import { SkillManager } from './skills/skills.js';
 import { SessionRecorder } from './sessions/session.js';
+import { loadSessionMessages } from './sessions/session.js';
 import { ToolRegistry } from './tools/registry.js';
 import {
   createRunShellTool,
@@ -47,6 +48,8 @@ export interface CreateAgentOptions {
   mcpServers?: Record<string, string>;
   /** 自定义会话 ID（不传则自动生成） */
   sessionId?: string;
+  /** 是否恢复指定会话的对话历史 */
+  resumeSession?: boolean;
 }
 
 /** createAgent 的返回结果 */
@@ -142,6 +145,11 @@ export async function createAgent(
     },
     toolRegistry,
   );
+
+  if (options.resumeSession) {
+    const messages = await loadSessionMessages(sessionId);
+    await agent.restoreSession(messages);
+  }
 
   return { agent, mcpClients, sandbox, sessionId };
 }

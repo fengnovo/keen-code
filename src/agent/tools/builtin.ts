@@ -24,8 +24,8 @@ export function createRunShellTool(sandbox: Sandbox): Tool {
     schema: z.object({
       command: z.string().describe('要执行的 shell 命令'),
     }),
-    async execute(params: { command: string }) {
-      const result = await sandbox.runShell(params.command);
+    async execute(params: { command: string }, signal?: AbortSignal) {
+      const result = await sandbox.runShell(params.command, signal);
       return {
         stdout: result.stdout,
         stderr: result.stderr,

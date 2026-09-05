@@ -56,6 +56,8 @@ export type ToolResultCallback = (toolName: string, result: unknown) => void;
 export interface ChatOptions {
   /** 流式输出回调，传入后文本会逐 token 回调 */
   onToken?: StreamCallback;
+  /** 取消当前 LLM 请求 */
+  signal?: AbortSignal;
 }
 
 /** Agent 运行时的回调选项，CLI 层用这些回调实现实时输出 */

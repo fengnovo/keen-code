@@ -414,6 +414,7 @@ npm run cli -- chat --mcp tandem=https://example.com/mcp
 # 会话记录查看
 npm run cli -- session list
 npm run cli -- session tree <sessionId> <runId>
+npm run cli -- session tree sess_1788604755830_rirvgs run_1788604755834_g4ays1
 
 # 类型检查
 npm run typecheck
@@ -421,6 +422,9 @@ npm run typecheck
 # 帮助
 npm run cli -- help
 ```
+
+在 `chat` 模式中，可以先用 `/session list` 找到会话 ID，再输入
+`/session <sessionId>` 切回该会话。Agent 会恢复已记录的用户和助手消息，并切换到该会话的 workspace。
 
 ---
 
@@ -431,11 +435,15 @@ npm run cli -- help
 | `/exit` | 退出对话 |
 | `/help` | 查看可用命令 |
 | `/session` | 查看当前会话记录路径 |
+| `/session <sessionId>` | 切换到指定会话并恢复历史 |
 | `/session list` | 列出所有 会话记录 |
 | `/session tree <sid> <rid>` | 查看某个 run 的树状结构 |
+| `/log` | 查看当前 session 的对话列表和每条输入摘要 |
 | `/compress` | 手动压缩对话历史 |
 | `/memory` | 查看当前记忆（短期 + 长期） |
 | `/skills` | 列出可用技能 |
+
+聊天请求进行中按一次 `Ctrl+C` 会取消当前 LLM 请求或 shell 工具，再按一次 `Ctrl+C` 退出程序。
 
 ---
 

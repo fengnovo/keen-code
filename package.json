@@ -6,7 +6,8 @@
   "scripts": {
     "cli": "tsx src/cli.ts",
     "chat": "tsx src/cli.ts chat",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "serve": "tsx src/server.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.0.0",

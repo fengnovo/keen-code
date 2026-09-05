@@ -16,6 +16,7 @@ export interface Sandbox {
   /** 在沙箱工作目录中执行 shell 命令 */
   runShell(
     command: string,
+    signal?: AbortSignal,
   ): Promise<{ stdout: string; stderr: string; exitCode: number }>;
 
   /** 读取工作目录内的文件（路径相对于工作目录） */
@@ -64,6 +65,7 @@ export class LocalSandbox implements Sandbox {
    */
   async runShell(
     command: string,
+    signal?: AbortSignal,
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     return new Promise((resolve) => {
       execFile(
@@ -73,6 +75,7 @@ export class LocalSandbox implements Sandbox {
           cwd: this.workDir,
           timeout: 30000, // 30 秒超时
           maxBuffer: 1024 * 1024, // 1MB 输出上限
+          signal,
         },
         (error, stdout, stderr) => {
           resolve({

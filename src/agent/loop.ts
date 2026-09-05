@@ -63,12 +63,16 @@ export class AgentRun {
    * @param callbacks 可选回调（流式输出、工具调用通知）
    * @returns 最终回答文本
    */
-  async run(userInput: string, callbacks?: RunCallbacks): Promise<string> {
+  async run(
+    userInput: string,
+    callbacks?: RunCallbacks,
+    signal?: AbortSignal,
+  ): Promise<string> {
     const onToken = callbacks?.onToken;
     const onToolCall = callbacks?.onToolCall;
     const onToolResult = callbacks?.onToolResult;
     this.turnCount++;
-    await this.recorder.turnStart(this.turnCount);
+    await this.recorder.turnStart(this.turnCount, userInput);
 
     // 第一轮时构建并注入 system prompt
     const systemPrompt = await this.buildSystemPrompt();
@@ -102,7 +106,11 @@ export class AgentRun {
         messages,
         toolDefs.map((t) => t.name),
       );
-      const response = await this.llm.chat(messages, toolDefs, { onToken });
+      signal?.throwIfAborted();
+      const response = await this.llm.chat(messages, toolDefs, {
+        onToken,
+        signal,
+      });
       await this.recorder.llmResponse(
         this.turnCount,
         response.content,
@@ -132,7 +140,7 @@ export class AgentRun {
         toolCallsThisTurn++;
         if (onToolCall) onToolCall(toolCall); // 通知 CLI 层显示工具调用
 
-        const result = await this.executeToolCall(toolCall);
+        const result = await this.executeToolCall(toolCall, signal);
         if (onToolResult) onToolResult(toolCall.name, result); // 通知 CLI 层显示结果
 
         // 把工具执行结果加回消息历史，供下一轮 LLM 推理使用
@@ -173,11 +181,26 @@ export class AgentRun {
     return answer;
   }
 
+  /** 恢复已有会话的用户和助手消息 */
+  async restoreSession(messages: ChatMessage[]): Promise<void> {
+    const systemPrompt = await this.buildSystemPrompt();
+    this.context.replaceMessages([
+      { role: 'system', content: systemPrompt },
+      ...messages,
+    ]);
+    this.turnCount = messages.filter(
+      (message) => message.role === 'user',
+    ).length;
+  }
+
   /**
    * 执行单个工具调用
    * 先记录会话事件，再执行工具，最后记录结果事件
    */
-  private async executeToolCall(toolCall: ToolCall): Promise<unknown> {
+  private async executeToolCall(
+    toolCall: ToolCall,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
     await this.recorder.toolCall(
       this.turnCount,
       toolCall.name,
@@ -186,8 +209,13 @@ export class AgentRun {
 
     let result: unknown;
     try {
-      result = await this.tools.execute(toolCall.name, toolCall.arguments);
+      result = await this.tools.execute(
+        toolCall.name,
+        toolCall.arguments,
+        signal,
+      );
     } catch (e: unknown) {
+      if (signal?.aborted) throw e;
       result = { error: (e as Error).message };
     }
 

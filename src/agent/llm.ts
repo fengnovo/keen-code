@@ -27,6 +27,7 @@ export class MockLLM implements LLMProvider {
     tools: ToolDefinition[],
     options?: ChatOptions,
   ): Promise<LLMResponse> {
+    options?.signal?.throwIfAborted();
     // 取最后一条用户消息作为输入
     const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user');
     const userInput = lastUserMsg?.content ?? '你好';
@@ -37,6 +38,7 @@ export class MockLLM implements LLMProvider {
     // 如果传入了流式回调，逐字模拟输出
     if (options?.onToken) {
       for (const char of content) {
+        options?.signal?.throwIfAborted();
         options.onToken(char);
         await new Promise((r) => setTimeout(r, 10)); // 模拟网络延迟
       }
@@ -123,14 +125,17 @@ export class DeepSeekLLM implements LLMProvider {
     let streamFailed = false;
 
     try {
-      const stream = await this.client.chat.completions.create({
-        model: this.model,
-        messages:
-          openaiMessages as unknown as OpenAI.Chat.ChatCompletionMessageParam[],
-        tools: openaiTools.length > 0 ? openaiTools : undefined,
-        tool_choice: openaiTools.length > 0 ? 'auto' : undefined,
-        stream: true,
-      });
+      const stream = await this.client.chat.completions.create(
+        {
+          model: this.model,
+          messages:
+            openaiMessages as unknown as OpenAI.Chat.ChatCompletionMessageParam[],
+          tools: openaiTools.length > 0 ? openaiTools : undefined,
+          tool_choice: openaiTools.length > 0 ? 'auto' : undefined,
+          stream: true,
+        },
+        { signal: options?.signal },
+      );
 
       // 逐 chunk 处理流式响应
       for await (const chunk of stream) {
@@ -160,6 +165,9 @@ export class DeepSeekLLM implements LLMProvider {
         }
       }
     } catch (streamErr) {
+      if (options?.signal?.aborted) {
+        throw streamErr;
+      }
       // 流式失败：如果完全没有收到数据，标记需要回退到非流式
       if (!content && toolCallMap.size === 0) {
         streamFailed = true;
@@ -178,13 +186,16 @@ export class DeepSeekLLM implements LLMProvider {
 
     // --- 流式失败，回退到非流式调用 ---
     if (streamFailed) {
-      const response = await this.client.chat.completions.create({
-        model: this.model,
-        messages:
-          openaiMessages as unknown as OpenAI.Chat.ChatCompletionMessageParam[],
-        tools: openaiTools.length > 0 ? openaiTools : undefined,
-        tool_choice: openaiTools.length > 0 ? 'auto' : undefined,
-      });
+      const response = await this.client.chat.completions.create(
+        {
+          model: this.model,
+          messages:
+            openaiMessages as unknown as OpenAI.Chat.ChatCompletionMessageParam[],
+          tools: openaiTools.length > 0 ? openaiTools : undefined,
+          tool_choice: openaiTools.length > 0 ? 'auto' : undefined,
+        },
+        { signal: options?.signal },
+      );
 
       const choice = response.choices[0];
       const message = choice.message;
