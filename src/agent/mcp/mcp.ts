@@ -17,6 +17,10 @@ import {
   shouldBlockTool,
   SecurityScanOptions,
 } from './mcpSecurity.js';
+import {
+  MCPRemoteServerConfig,
+  MCPStdioServerConfig,
+} from './mcpConfig.js';
 
 // MCP 客户端类型（动态导入，避免未安装时报错）
 // 使用 any 以兼容不同版本的 MCP SDK
@@ -27,7 +31,7 @@ type MCPClient = any;
  * 连接一个远程 MCP 服务，将其工具注册到 ToolRegistry 中
  *
  * @param name 服务名称（用于工具前缀，格式：name__toolName）
- * @param url  MCP 服务 URL
+ * @param config MCP 服务 URL、传输类型和请求头
  * @param registry 工具注册表
  * @param securityOptions 安全扫描配置（可选，默认阻止 critical/high 级别工具）
  * @returns 连接后的 MCP 客户端
@@ -36,7 +40,7 @@ type MCPClient = any;
  */
 export async function connectMCP(
   name: string,
-  url: string,
+  config: MCPRemoteServerConfig,
   registry: ToolRegistry,
   securityOptions: SecurityScanOptions = {},
 ): Promise<MCPClient> {
@@ -59,12 +63,21 @@ export async function connectMCP(
     );
   }
 
-  // 根据 URL 选择传输方式：含 /sse 用 SSE，否则用 StreamableHTTP
+  const requestInit = config.headers
+    ? { headers: config.headers }
+    : undefined;
+
+  // 显式 transport 优先；未配置时含 /sse 用 SSE，否则用 StreamableHTTP
   let transport: unknown;
-  if (url.includes('/sse')) {
-    transport = new SSEClientTransport(new URL(url));
+  if (
+    config.transport === 'sse' ||
+    (!config.transport && config.url.includes('/sse'))
+  ) {
+    transport = new SSEClientTransport(new URL(config.url), { requestInit });
   } else {
-    transport = new StreamableHTTPClientTransport(new URL(url));
+    transport = new StreamableHTTPClientTransport(new URL(config.url), {
+      requestInit,
+    });
   }
 
   // MCP SDK 2.x API：构造函数传 clientInfo，connect 传 transport
@@ -73,14 +86,19 @@ export async function connectMCP(
   // 连接并初始化 MCP 会话
   await client.connect(transport);
 
-  return registerMCPTools(name, url, client, registry, securityOptions);
+  return registerMCPTools(
+    name,
+    config.url,
+    client,
+    registry,
+    securityOptions,
+  );
 }
 
 /** 通过 stdio 启动本地 MCP 服务并注册其工具 */
 export async function connectMCPStdio(
   name: string,
-  command: string,
-  args: string[],
+  config: MCPStdioServerConfig,
   registry: ToolRegistry,
   securityOptions: SecurityScanOptions = {},
 ): Promise<MCPClient> {
@@ -100,15 +118,31 @@ export async function connectMCPStdio(
   }
 
   const transport = new StdioClientTransport({
-    command,
-    args,
-    stderr: 'inherit',
+    command: config.command,
+    args: config.args,
+    env: config.env,
+    cwd: config.cwd,
+    stderr: config.stderr || 'pipe',
   });
+  let stderrOutput = '';
+  if (config.stderr !== 'inherit' && config.stderr !== 'ignore') {
+    transport.stderr?.on('data', (chunk: Buffer | string) => {
+      stderrOutput = (stderrOutput + chunk.toString()).slice(-8000);
+    });
+  }
+
   const client = new Client({ name: 'keen-code', version: '0.1.0' });
-  await client.connect(transport);
+  try {
+    await client.connect(transport);
+  } catch (error: unknown) {
+    const details = stderrOutput.trim();
+    throw new Error(
+      `${(error as Error).message}${details ? `\n${details}` : ''}`,
+    );
+  }
   return registerMCPTools(
     name,
-    `stdio://${command}`,
+    `stdio://${config.command}`,
     client,
     registry,
     securityOptions,
@@ -134,7 +168,6 @@ async function registerMCPTools(
     const toolName = `${name}__${mcpTool.name}`; // 加前缀避免命名冲突
 
     if (shouldBlockTool(mcpTool.name, scanResult, securityOptions)) {
-      console.log(`  ⛔ 已阻止注册危险工具: ${toolName}`);
       continue;
     }
 
@@ -205,14 +238,16 @@ function createMCPToolWrapper(
  *
  * 示例：--mcp tandem=https://tandem.ac/mcp --mcp other=https://other.com/sse
  */
-export function parseMCPArgs(mcpArgs: string[]): Record<string, string> {
-  const servers: Record<string, string> = {};
+export function parseMCPArgs(
+  mcpArgs: string[],
+): Record<string, MCPRemoteServerConfig> {
+  const servers: Record<string, MCPRemoteServerConfig> = {};
   for (const arg of mcpArgs) {
     const eqIndex = arg.indexOf('=');
     if (eqIndex > 0) {
       const name = arg.slice(0, eqIndex);
       const url = arg.slice(eqIndex + 1);
-      servers[name] = url;
+      servers[name] = { url };
     }
   }
   return servers;
@@ -221,8 +256,8 @@ export function parseMCPArgs(mcpArgs: string[]): Record<string, string> {
 /** 解析本地 stdio MCP 参数，格式为 name=command args... */
 export function parseMCPCommandArgs(
   mcpArgs: string[],
-): Record<string, { command: string; args: string[] }> {
-  const servers: Record<string, { command: string; args: string[] }> = {};
+): Record<string, MCPStdioServerConfig> {
+  const servers: Record<string, MCPStdioServerConfig> = {};
   for (const arg of mcpArgs) {
     const eqIndex = arg.indexOf('=');
     if (eqIndex <= 0) continue;

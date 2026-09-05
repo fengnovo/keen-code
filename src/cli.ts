@@ -19,6 +19,11 @@ import {
   showSessionTree,
 } from './agent/sessions/sessionView.js';
 import { parseMCPArgs, parseMCPCommandArgs } from './agent/mcp/mcp.js';
+import {
+  loadMCPConfig,
+  MCPRemoteServerConfig,
+  MCPStdioServerConfig,
+} from './agent/mcp/mcpConfig.js';
 import { DockerSandbox } from './agent/sandbox/dockerSandbox.js';
 import { AgentRun } from './agent/loop.js';
 import { ToolCall, RunCallbacks } from './agent/types.js';
@@ -28,6 +33,45 @@ import * as readline from 'node:readline';
 /** 将名称列表格式化为单行，空列表显示“无” */
 function formatNameList(names: string[]): string {
   return names.length > 0 ? names.join(', ') : '无';
+}
+
+interface RuntimeMCPConfig {
+  mcpServers: Record<string, MCPRemoteServerConfig>;
+  mcpCommands: Record<string, MCPStdioServerConfig>;
+}
+
+/** 加载 .mcp.json，并用命令行中的同名 MCP 配置覆盖它 */
+async function resolveMCPConfig(
+  flags: Record<string, string | boolean | string[]>,
+): Promise<RuntimeMCPConfig> {
+  const configFlag = flags['mcp-config'];
+  if (configFlag !== undefined && typeof configFlag !== 'string') {
+    throw new Error('--mcp-config 需要提供 JSON 文件路径');
+  }
+
+  const fileConfig = await loadMCPConfig(configFlag);
+  const cliServers = parseMCPArgs((flags.mcp as string[]) || []);
+  const cliCommands = parseMCPCommandArgs(
+    (flags['mcp-command'] as string[]) || [],
+  );
+
+  const duplicateCliNames = Object.keys(cliServers).filter(
+    (name) => cliCommands[name],
+  );
+  if (duplicateCliNames.length > 0) {
+    throw new Error(
+      `以下 MCP 同时配置了远程和 stdio 连接: ${duplicateCliNames.join(', ')}`,
+    );
+  }
+
+  const mcpServers = { ...fileConfig.mcpServers, ...cliServers };
+  const mcpCommands = { ...fileConfig.mcpCommands, ...cliCommands };
+
+  // 命令行配置优先，并覆盖 JSON 中不同传输类型的同名服务。
+  for (const name of Object.keys(cliServers)) delete mcpCommands[name];
+  for (const name of Object.keys(cliCommands)) delete mcpServers[name];
+
+  return { mcpServers, mcpCommands };
 }
 
 /**
@@ -151,6 +195,7 @@ keen-code - 一个最小的 Agent Harness
 选项:
   --mock               使用 Mock LLM（不调用真实 API）
   --sandbox <type>     沙箱类型: local (默认) / docker
+  --mcp-config <path>  MCP JSON 配置文件（默认: .mcp.json）
   --mcp <name=url>     接入远程 MCP 服务（可多次使用）
   --mcp-command <name=command args...>
                        接入本地 stdio MCP 服务（可多次使用）
@@ -177,10 +222,7 @@ async function runCommand(
 ): Promise<void> {
   const mock = flags.mock === true;
   const sandboxType = (flags.sandbox as string) || 'local';
-  const mcpServers = parseMCPArgs((flags.mcp as string[]) || []);
-  const mcpCommands = parseMCPCommandArgs(
-    (flags['mcp-command'] as string[]) || [],
-  );
+  const { mcpServers, mcpCommands } = await resolveMCPConfig(flags);
 
   const { agent, sandbox, sessionId } = await createAgent({
     mock,
@@ -221,10 +263,7 @@ async function chatCommand(
 ): Promise<void> {
   const mock = flags.mock === true;
   const sandboxType = (flags.sandbox as string) || 'local';
-  const mcpServers = parseMCPArgs((flags.mcp as string[]) || []);
-  const mcpCommands = parseMCPCommandArgs(
-    (flags['mcp-command'] as string[]) || [],
-  );
+  const { mcpServers, mcpCommands } = await resolveMCPConfig(flags);
 
   let current = await createAgent({
     mock,
@@ -352,8 +391,8 @@ async function handleChatCommand(
   options: {
     mock: boolean;
     sandboxType: 'local' | 'docker';
-    mcpServers: Record<string, string>;
-    mcpCommands: Record<string, { command: string; args: string[] }>;
+    mcpServers: Record<string, MCPRemoteServerConfig>;
+    mcpCommands: Record<string, MCPStdioServerConfig>;
   },
 ): Promise<CreateAgentResult | undefined> {
   const parts = input.split(/\s+/);

@@ -8,3 +8,4 @@ _traces
 _sessions
 _skills
 .DS_Store
+.mcp.json

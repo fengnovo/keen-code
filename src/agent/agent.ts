@@ -36,6 +36,10 @@ import {
 } from './memory.js';
 import { createUseSkillTool } from './skills/skills.js';
 import { connectMCP, connectMCPStdio } from './mcp/mcp.js';
+import {
+  MCPRemoteServerConfig,
+  MCPStdioServerConfig,
+} from './mcp/mcpConfig.js';
 import { AgentRun } from './loop.js';
 
 /** 创建 Agent 的配置选项 */
@@ -44,10 +48,10 @@ export interface CreateAgentOptions {
   mock?: boolean;
   /** 沙箱类型：local（默认）或 docker */
   sandboxType?: 'local' | 'docker';
-  /** 远程 MCP 服务配置：{ 名称: URL } */
-  mcpServers?: Record<string, string>;
+  /** 远程 HTTP/SSE MCP 服务配置 */
+  mcpServers?: Record<string, MCPRemoteServerConfig>;
   /** 本地 stdio MCP 服务配置 */
-  mcpCommands?: Record<string, { command: string; args: string[] }>;
+  mcpCommands?: Record<string, MCPStdioServerConfig>;
   /** 自定义会话 ID（不传则自动生成） */
   sessionId?: string;
   /** 是否恢复指定会话的对话历史 */
@@ -133,9 +137,9 @@ export async function createAgent(
 
   // 7. 接入远程 MCP 服务（如果配置了）
   if (options.mcpServers && Object.keys(options.mcpServers).length > 0) {
-    for (const [name, url] of Object.entries(options.mcpServers)) {
+    for (const [name, config] of Object.entries(options.mcpServers)) {
       try {
-        const client = await connectMCP(name, url, toolRegistry);
+        const client = await connectMCP(name, config, toolRegistry);
         mcpClients.push(client);
         mcpNames.push(name);
       } catch (e: unknown) {
@@ -147,12 +151,7 @@ export async function createAgent(
   if (options.mcpCommands && Object.keys(options.mcpCommands).length > 0) {
     for (const [name, config] of Object.entries(options.mcpCommands)) {
       try {
-        const client = await connectMCPStdio(
-          name,
-          config.command,
-          config.args,
-          toolRegistry,
-        );
+        const client = await connectMCPStdio(name, config, toolRegistry);
         mcpClients.push(client);
         mcpNames.push(name);
       } catch (e: unknown) {

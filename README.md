@@ -18,7 +18,7 @@
 - [会话记录系统](#会话记录系统)
 - [记忆系统](#记忆系统)
 - [技能系统](#技能系统)
-- [远程 MCP](#远程-mcp)
+- [MCP](#mcp)
 - [配置说明](#配置说明)
 
 ---
@@ -243,7 +243,7 @@ keen-code/
 │       ├── llm.ts                    # LLM 层：MockLLM + DeepSeekLLM（流式）
 │       ├── loop.ts                   # Agent 主循环（ReAct 模式）
 │       ├── context.ts                # 上下文管理器（消息历史 + 自动压缩）
-│       ├── mcp.ts                    # 远程 MCP 接入（动态导入 SDK）
+│       ├── mcp/                      # MCP 配置、连接及安全扫描
 │       ├── memory.ts                 # 记忆系统（短期 + 长期 + 3个工具）
 │       ├── skills.ts                 # 技能系统（加载 SKILL.md + use_skill 工具）
 │       ├── sandbox/                  # 沙箱模块
@@ -367,10 +367,11 @@ keen-code/
 - 执行工具时自动用 Zod 校验参数
 - 将 Zod Schema 转换为 JSON Schema 供 LLM 使用
 
-### 11. 远程 MCP (`mcp.ts`)
+### 11. MCP (`mcp/`)
 
-动态导入 `@modelcontextprotocol/client`，连接远程 MCP 服务：
+自动加载 `.mcp.json`，并通过 `@modelcontextprotocol/client` 连接 MCP 服务：
 - 自动选择传输方式（SSE 或 StreamableHTTP）
+- 支持本地 stdio MCP 服务
 - 将远程工具注册到本地 ToolRegistry
 - 工具名加前缀 `<服务名>__<工具名>` 避免冲突
 
@@ -565,7 +566,48 @@ Agent 启动时自动加载所有技能，摘要注入 system prompt。AI 可通
 
 ---
 
-## 远程 MCP
+## MCP
+
+### JSON 配置（推荐）
+
+`run` 和 `chat` 启动时会自动读取当前目录下的 `.mcp.json`。配置格式兼容
+Claude Code 常用的 `mcpServers` 结构，同时支持远程 HTTP/SSE 和本地 stdio
+服务：
+
+```json
+{
+  "mcpServers": {
+    "chrome": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "chrome-devtools-mcp@latest"],
+      "env": {
+        "NODE_OPTIONS": "--no-warnings=ExperimentalWarning"
+      }
+    },
+    "remote": {
+      "type": "http",
+      "url": "https://example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer ${MCP_API_TOKEN}"
+      }
+    }
+  }
+}
+```
+
+- `type` 支持 `stdio`、`http`、`streamable-http` 和 `sse`
+- stdio 支持 `args`、`env`、`cwd`、`stderr`
+- stdio 的 stderr 默认静默捕获，连接失败时才显示；调试时可设为 `inherit`
+- HTTP/SSE 支持 `headers`
+- 字符串值支持 `${ENV_VAR}` 和 `${ENV_VAR:-default}` 环境变量展开
+- 设置 `"disabled": true` 可暂时禁用服务
+- 可通过 `--mcp-config <path>` 指定其他 JSON 文件
+- `--mcp` 和 `--mcp-command` 仍然可用，并覆盖 JSON 中的同名配置
+
+仓库中的 `.mcp.json.example` 可以直接作为模板。
+
+### 命令行配置
 
 通过 `--mcp` 参数接入远程 MCP 服务：
 
