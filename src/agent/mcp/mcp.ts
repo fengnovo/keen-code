@@ -175,7 +175,7 @@ function createMCPToolWrapper(
   localName: string,
   remoteName: string,
   description: string,
-  _inputSchema: Record<string, unknown>,
+  inputSchema: Record<string, unknown>,
   client: MCPClient,
 ): Tool {
   // 用 z.record(z.unknown()) 接收任意参数对象
@@ -185,6 +185,10 @@ function createMCPToolWrapper(
     name: localName,
     description: `[MCP] ${description}`,
     schema,
+    parameters: {
+      type: 'object',
+      ...inputSchema,
+    },
     async execute(params: Record<string, unknown>) {
       try {
         const result = await client.callTool({

@@ -21,6 +21,8 @@ export interface Tool<TParams = unknown, TReturn = unknown> {
   description: string;
   /** Zod 参数 schema（用于校验和生成 JSON Schema） */
   schema: ZodSchema<TParams>;
+  /** 可选的原始 JSON Schema（例如 MCP 动态工具参数） */
+  parameters?: Record<string, unknown>;
   /** 执行函数 */
   execute(params: TParams, signal?: AbortSignal): Promise<TReturn>;
 }
@@ -64,7 +66,7 @@ export class ToolRegistry {
   toToolDefinitions(): ToolDefinition[] {
     const defs: ToolDefinition[] = [];
     for (const tool of this.tools.values()) {
-      const jsonSchema = zodToJsonSchema(tool.schema);
+      const jsonSchema = tool.parameters || zodToJsonSchema(tool.schema);
       defs.push({
         name: tool.name,
         description: tool.description,
