@@ -13,9 +13,9 @@
 
 import "dotenv/config";
 import { createAgent, CreateAgentResult } from "./agent/agent.js";
-import { listSessions, showSessionTree } from "./agent/sessionView.js";
-import { parseMCPArgs } from "./agent/mcp.js";
-import { DockerSandbox } from "./agent/dockerSandbox.js";
+import { listSessions, showSessionTree } from "./agent/sessions/sessionView.js";
+import { parseMCPArgs } from "./agent/mcp/mcp.js";
+import { DockerSandbox } from "./agent/sandbox/dockerSandbox.js";
 import { AgentRun } from "./agent/loop.js";
 import { ToolCall, RunCallbacks } from "./agent/types.js";
 import * as readline from "node:readline";
@@ -317,7 +317,7 @@ async function handleChatCommand(
       const skills = agent.getSkills();
       const list = skills.listSkills();
       if (list.length === 0) {
-        console.log("暂无可用技能。在 skills/ 目录下创建子目录和 SKILL.md 即可添加技能。");
+        console.log("暂无可用技能。在 _skills/ 目录下创建子目录和 SKILL.md 即可添加技能。");
       } else {
         console.log(`\n可用技能 (${list.length} 个):`);
         for (const s of list) {

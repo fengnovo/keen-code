@@ -11,7 +11,7 @@
 
 import { z } from "zod";
 import { Tool } from "./registry.js";
-import { Sandbox } from "../sandbox.js";
+import { Sandbox } from "../sandbox/sandbox.js";
 
 /**
  * run_shell 工具：在沙箱工作目录中执行 shell 命令

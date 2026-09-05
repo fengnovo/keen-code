@@ -16,11 +16,11 @@ import { SessionEvent } from "./session.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const projectRoot = path.resolve(__dirname, "../..");
-const sessionsRoot = path.join(projectRoot, "sessions");
+const sessionsRoot = path.join(projectRoot, "_sessions");
 
 /**
  * 列出所有会话记录
- * 遍历 sessions/ 下的所有会话目录和 JSONL 文件
+ * 遍历 _sessions/ 下的所有会话目录和 JSONL 文件
  */
 export async function listSessions(): Promise<void> {
   try {

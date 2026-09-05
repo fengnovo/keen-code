@@ -2,9 +2,9 @@ node_modules
 dist
 .env
 workspace
-memory
-traces
+_memory
+_traces
 *.log
-sessions
-skills
+_sessions
+_skills
 .DS_Store

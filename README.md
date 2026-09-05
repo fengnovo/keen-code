@@ -253,14 +253,14 @@ keen-code/
 │       └── tools/
 │           ├── registry.ts           # 工具注册表（注册/执行/zod→JSON Schema）
 │           └── builtin.ts            # 内置工具（run_shell/read_file/write_file/finish）
-├── skills/                           # 技能目录
+├── _skills/                           # 技能目录
 │   └── example/
 │       └── SKILL.md                  # 示例技能
 ├── workspace/                        # 沙箱工作目录（按会话隔离）
 │   └── sess_xxx/                     # 每个会话一个子目录
-├── memory/                           # 长期记忆存储
+├── _memory/                           # 长期记忆存储
 │   └── long_term.json                # 长期记忆 JSON 文件
-├── sessions/                           # 会话记录目录
+├── _sessions/                           # 会话记录目录
 │   └── sess_xxx/                     # 每个会话一个目录
 │       └── run_xxx.jsonl           # 每次 run 一个 JSONL 文件
 ├── package.json
@@ -342,7 +342,7 @@ keen-code/
 
 ### 8. 技能系统 (`skills.ts`)
 
-自动扫描 `skills/*/SKILL.md` 文件，加载为技能：
+自动扫描 `_skills/*/SKILL.md` 文件，加载为技能：
 - 从 SKILL.md 中提取简短描述
 - 技能摘要注入到 system prompt
 - 提供 `use_skill` 工具，AI 可主动读取技能的完整说明
@@ -478,7 +478,7 @@ workspace/
 每次 `agent.run()` 调用都会记录完整的执行过程到 JSONL 文件：
 
 ```
-sessions/
+_sessions/
 └── sess_1788586747294_pntui3/
     └── run_1788586747297_ao900q.jsonl
 ```
@@ -509,7 +509,7 @@ sessions/
 
 ### 长期记忆
 
-- 持久化到 `memory/long_term.json`
+- 持久化到 `_memory/long_term.json`
 - 跨会话保留
 - 按关键词匹配检索
 - 格式：
@@ -528,10 +528,10 @@ sessions/
 
 ## 技能系统
 
-在 `skills/` 目录下创建子目录，放置 `SKILL.md` 文件即可添加技能：
+在 `_skills/` 目录下创建子目录，放置 `SKILL.md` 文件即可添加技能：
 
 ```
-skills/
+_skills/
 └── my-skill/
     └── SKILL.md
 ```

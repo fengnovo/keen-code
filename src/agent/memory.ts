@@ -34,11 +34,11 @@ export class MemoryManager {
   private longTermPath: string;
 
   constructor() {
-    // 从当前文件位置推算项目根目录，定位 memory/ 目录
+    // 从当前文件位置推算项目根目录，定位 _memory/ 目录
     const __filename = fileURLToPath(import.meta.url);
     const __dirname = path.dirname(__filename);
     const projectRoot = path.resolve(__dirname, "../..");
-    const memoryDir = path.join(projectRoot, "memory");
+    const memoryDir = path.join(projectRoot, "_memory");
     fs.mkdir(memoryDir, { recursive: true });
     this.longTermPath = path.join(memoryDir, "long_term.json");
   }

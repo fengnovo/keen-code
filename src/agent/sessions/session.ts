@@ -5,7 +5,7 @@
  * 将 Agent 执行的全过程记录到 JSONL 文件（每行一个 JSON 事件）
  * 包括：会话开始/结束、对话轮次、LLM 调用/响应、工具调用/结果
  *
- * 文件位置：sessions/<sessionId>/<runId>.jsonl
+ * 文件位置：_sessions/<sessionId>/<runId>.jsonl
  * 每个 session 一个目录，每次 agent.run() 生成一个 run 文件
  *
  * 注："trace" 这个词预留给评测（eval）记录使用
@@ -58,7 +58,7 @@ export class SessionRecorder {
     const __filename = fileURLToPath(import.meta.url);
     const __dirname = path.dirname(__filename);
     const projectRoot = path.resolve(__dirname, "../..");
-    this.sessionDir = path.join(projectRoot, "sessions", this.sessionId);
+    this.sessionDir = path.join(projectRoot, "_sessions", this.sessionId);
     this.filePath = path.join(this.sessionDir, `${this.runId}.jsonl`);
   }
 

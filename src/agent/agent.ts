@@ -16,11 +16,11 @@
 
 import "dotenv/config";
 import { createLLM } from "./llm.js";
-import { LocalSandbox, Sandbox } from "./sandbox.js";
-import { DockerSandbox } from "./dockerSandbox.js";
+import { LocalSandbox, Sandbox } from "./sandbox/sandbox.js";
+import { DockerSandbox } from "./sandbox/dockerSandbox.js"; 
 import { MemoryManager } from "./memory.js";
 import { SkillManager } from "./skills.js";
-import { SessionRecorder } from "./session.js";
+import { SessionRecorder } from "./sessions/session.js";
 import { ToolRegistry } from "./tools/registry.js";
 import {
   createRunShellTool,
@@ -34,7 +34,7 @@ import {
   createRecallTool,
 } from "./memory.js";
 import { createUseSkillTool } from "./skills.js";
-import { connectMCP } from "./mcp.js";
+import { connectMCP } from "./mcp/mcp.js";
 import { AgentRun } from "./loop.js";
 
 /** 创建 Agent 的配置选项 */

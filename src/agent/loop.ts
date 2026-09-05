@@ -6,11 +6,11 @@
 
 import { LLMProvider, ChatMessage, ToolCall, RunCallbacks } from "./types.js";
 import { ToolRegistry } from "./tools/registry.js";
-import { Sandbox } from "./sandbox.js";
+import { Sandbox } from "./sandbox/sandbox.js";
 import { MemoryManager } from "./memory.js";
 import { SkillManager } from "./skills.js";
 import { ContextManager } from "./context.js";
-import { SessionRecorder } from "./session.js";
+import { SessionRecorder } from "./sessions/session.js";
 
 /** 每轮最多调用 10 次工具，防止死循环 */
 const MAX_TOOL_CALLS_PER_TURN = 10;

@@ -38,13 +38,13 @@ export class SkillManager {
     const __filename = fileURLToPath(import.meta.url);
     const __dirname = path.dirname(__filename);
     const projectRoot = path.resolve(__dirname, "../..");
-    this.skillsDir = path.join(projectRoot, "skills");
+    this.skillsDir = path.join(projectRoot, "_skills");
   }
 
   /**
-   * 加载 skills/ 目录下所有技能
+   * 加载 _skills/ 目录下所有技能
    * 每个技能是一个子目录，里面需要有 SKILL.md 文件
-   * 格式：skills/<skill-name>/SKILL.md
+   * 格式：_skills/<skill-name>/SKILL.md
    */
   async loadAll(): Promise<void> {
     this.skills.clear();

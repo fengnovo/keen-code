@@ -9,8 +9,8 @@
  *   npm run cli -- chat --mcp tandem=https://tandem.ac/mcp
  */
 
-import { ToolRegistry } from "./tools/registry.js";
-import { Tool } from "./tools/registry.js";
+import { ToolRegistry } from "../tools/registry.js";
+import { Tool } from "../tools/registry.js";
 import { z } from "zod";
 import { scanMCPServer, formatScanResult, shouldBlockTool, SecurityScanOptions } from "./mcpSecurity.js";
 
