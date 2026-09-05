@@ -13,7 +13,7 @@ import { ContextManager } from './context.js';
 import { SessionRecorder } from './sessions/session.js';
 
 /** 每轮最多调用 10 次工具，防止死循环 */
-const MAX_TOOL_CALLS_PER_TURN = 10;
+const MAX_TOOL_CALLS_PER_TURN = 20;
 
 /** Agent 运行所需的依赖项 */
 export interface AgentRunOptions {

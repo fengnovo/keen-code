@@ -18,7 +18,7 @@ import {
   listSessionLogs,
   showSessionTree,
 } from './agent/sessions/sessionView.js';
-import { parseMCPArgs } from './agent/mcp/mcp.js';
+import { parseMCPArgs, parseMCPCommandArgs } from './agent/mcp/mcp.js';
 import { DockerSandbox } from './agent/sandbox/dockerSandbox.js';
 import { AgentRun } from './agent/loop.js';
 import { ToolCall, RunCallbacks } from './agent/types.js';
@@ -107,8 +107,8 @@ function parseArgs(argv: string[]): {
       const key = arg.slice(2);
       const next = argv[i + 1];
       if (next && !next.startsWith('--')) {
-        // --mcp 支持重复使用，收集为数组
-        if (key === 'mcp') {
+        // MCP 参数支持重复使用，统一收集为数组
+        if (key === 'mcp' || key === 'mcp-command') {
           if (!flags[key]) flags[key] = [];
           (flags[key] as string[]).push(next);
         } else {
@@ -147,6 +147,8 @@ keen-code - 一个最小的 Agent Harness
   --mock               使用 Mock LLM（不调用真实 API）
   --sandbox <type>     沙箱类型: local (默认) / docker
   --mcp <name=url>     接入远程 MCP 服务（可多次使用）
+  --mcp-command <name=command args...>
+                       接入本地 stdio MCP 服务（可多次使用）
 
 示例:
   npm run cli -- run "你好"
@@ -171,11 +173,15 @@ async function runCommand(
   const mock = flags.mock === true;
   const sandboxType = (flags.sandbox as string) || 'local';
   const mcpServers = parseMCPArgs((flags.mcp as string[]) || []);
+  const mcpCommands = parseMCPCommandArgs(
+    (flags['mcp-command'] as string[]) || [],
+  );
 
   const { agent, sandbox, sessionId } = await createAgent({
     mock,
     sandboxType: sandboxType as 'local' | 'docker',
     mcpServers,
+    mcpCommands,
   });
 
   console.log(`> ${message}\n`);
@@ -211,11 +217,15 @@ async function chatCommand(
   const mock = flags.mock === true;
   const sandboxType = (flags.sandbox as string) || 'local';
   const mcpServers = parseMCPArgs((flags.mcp as string[]) || []);
+  const mcpCommands = parseMCPCommandArgs(
+    (flags['mcp-command'] as string[]) || [],
+  );
 
   let current = await createAgent({
     mock,
     sandboxType: sandboxType as 'local' | 'docker',
     mcpServers,
+    mcpCommands,
   });
 
   const recorder = current.agent.getRecorder();
@@ -267,6 +277,7 @@ async function chatCommand(
           mock,
           sandboxType: sandboxType as 'local' | 'docker',
           mcpServers,
+          mcpCommands,
         });
         if (switched) {
           if (current.sandbox instanceof DockerSandbox) {
@@ -333,6 +344,7 @@ async function handleChatCommand(
     mock: boolean;
     sandboxType: 'local' | 'docker';
     mcpServers: Record<string, string>;
+    mcpCommands: Record<string, { command: string; args: string[] }>;
   },
 ): Promise<CreateAgentResult | undefined> {
   const parts = input.split(/\s+/);

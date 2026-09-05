@@ -35,7 +35,7 @@ import {
   createRecallTool,
 } from './memory.js';
 import { createUseSkillTool } from './skills/skills.js';
-import { connectMCP } from './mcp/mcp.js';
+import { connectMCP, connectMCPStdio } from './mcp/mcp.js';
 import { AgentRun } from './loop.js';
 
 /** 创建 Agent 的配置选项 */
@@ -46,6 +46,8 @@ export interface CreateAgentOptions {
   sandboxType?: 'local' | 'docker';
   /** 远程 MCP 服务配置：{ 名称: URL } */
   mcpServers?: Record<string, string>;
+  /** 本地 stdio MCP 服务配置 */
+  mcpCommands?: Record<string, { command: string; args: string[] }>;
   /** 自定义会话 ID（不传则自动生成） */
   sessionId?: string;
   /** 是否恢复指定会话的对话历史 */
@@ -126,6 +128,22 @@ export async function createAgent(
     for (const [name, url] of Object.entries(options.mcpServers)) {
       try {
         const client = await connectMCP(name, url, toolRegistry);
+        mcpClients.push(client);
+      } catch (e: unknown) {
+        console.error(`[MCP ${name}] 连接失败: ${(e as Error).message}`);
+      }
+    }
+  }
+
+  if (options.mcpCommands && Object.keys(options.mcpCommands).length > 0) {
+    for (const [name, config] of Object.entries(options.mcpCommands)) {
+      try {
+        const client = await connectMCPStdio(
+          name,
+          config.command,
+          config.args,
+          toolRegistry,
+        );
         mcpClients.push(client);
       } catch (e: unknown) {
         console.error(`[MCP ${name}] 连接失败: ${(e as Error).message}`);

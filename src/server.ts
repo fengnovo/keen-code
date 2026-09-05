@@ -44,7 +44,71 @@ function sendSSE(
   res.write(`data: ${JSON.stringify(obj)}\n\n`);
 }
 
-/** 读取请求 JSON body */
+/**
+ * 有序 SSE 写入器：所有事件都走同一条 Promise 队列，保证
+ * token / tool_call / done 等事件顺序不被打乱。
+ * sendTokens 会把较大的一段文本切成小片按时间间隔下发，
+ * 使「finish 一次性返回」「非流式兜底」等场景也能在页面上看到逐字流式输出。
+ */
+function createSSEWriter(res: http.ServerResponse) {
+  let chain: Promise<void> = Promise.resolve();
+
+  /** 队列化一个写任务（串行执行，异常不阻断后续） */
+  function enqueue(task: () => Promise<void> | void): void {
+    chain = chain.then(async () => {
+      await task();
+    }).catch(() => undefined);
+  }
+
+  return {
+    /** 立即（按队列顺序）发送一个事件对象 */
+    send(obj: Record<string, unknown>): void {
+      enqueue(() => {
+        try { sendSSE(res, obj); } catch { /* ignore */ }
+      });
+    },
+    /**
+     * 发送一段 assistant 文本：
+     *  - 文本很短（<= maxPiece）：直接作为一个 token 事件，不加额外延迟；
+     *  - 文本较长：切成 maxPiece 字符的小片，每片间隔 delayMs 下发，模拟流式。
+     * @returns 该段文本按码点计的长度（供统计已流式输出字符数）
+     */
+    sendTokens(text: string, delayMs = 12, maxPiece = 8): number {
+      const chars = Array.from(text); // 按码点切分，避免截断代理对
+      if (chars.length === 0) return 0;
+      if (chars.length <= maxPiece) {
+        const payload = JSON.stringify({ type: 'token', content: text });
+        enqueue(() => {
+          try { res.write(`data: ${payload}\n\n`); } catch { /* ignore */ }
+        });
+        return chars.length;
+      }
+      const pieces: string[] = [];
+      for (let i = 0; i < chars.length; i += maxPiece) {
+        pieces.push(chars.slice(i, i + maxPiece).join(''));
+      }
+      let flush: Promise<void> = Promise.resolve();
+      for (const piece of pieces) {
+        const payload = JSON.stringify({ type: 'token', content: piece });
+        flush = flush.then(
+          () =>
+            new Promise<void>((resolve) => {
+              try { res.write(`data: ${payload}\n\n`); } catch { /* ignore */ }
+              setTimeout(resolve, delayMs);
+            }),
+        );
+      }
+      enqueue(() => flush);
+      return chars.length;
+    },
+    /** 等待队列中的全部写入完成 */
+    flush(): Promise<void> {
+      return chain;
+    },
+  };
+}
+
+
 function readBody(req: http.IncomingMessage): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
     let data = '';
@@ -122,32 +186,57 @@ async function handleChat(
   });
   res.write(': connected\n\n');
 
+  const writer = createSSEWriter(res);
+
   try {
     const holder = await getOrCreateAgent(sessionId, mock);
-    let finalAnswer = '';
+    // agent.run 的返回值才是真正的最终回答：
+    //  - 模型直接流式输出文本时，返回累计的完整 content；
+    //  - 模型通过 finish 工具一次性提交 answer 时（无 token 流），
+    //    返回的是 finish 的 answer 参数。绝不能忽略，否则 done 事件
+    //    携带的内容会残缺，导致 Web 端历史记录不全。
+    let streamed = '';
+    // 已以 token 形式下发的字符数（按码点计）
+    let streamedChars = 0;
 
-    await holder.agent.run(message, {
+    const runAnswer = await holder.agent.run(message, {
       onToken: (delta: string) => {
-        finalAnswer += delta;
-        sendSSE(res, { type: 'token', content: delta });
+        streamed += delta;
+        streamedChars += writer.sendTokens(delta);
       },
       onToolCall: (tc: ToolCall) => {
-        sendSSE(res, {
+        writer.send({
           type: 'tool_call',
           name: tc.name,
           args: tc.arguments,
         });
       },
       onToolResult: (toolName: string, result: unknown) => {
-        sendSSE(res, { type: 'tool_result', name: toolName, result });
+        writer.send({ type: 'tool_result', name: toolName, result });
       },
     });
 
-    sendSSE(res, { type: 'done', answer: finalAnswer });
+    const finalAnswer = runAnswer || streamed;
+
+    // 若最终回答中还有未流式输出的部分（例如由 finish 工具一次性返回），
+    // 切成小片补发，保证页面始终能看到逐字流式效果。
+    // 仅当已流式文本是最终回答的前缀时才补发，避免中间文本与最终回答
+    // 内容不一致时在页面上重复拼接。
+    const remaining = finalAnswer.startsWith(streamed)
+      ? Array.from(finalAnswer).slice(streamedChars).join('')
+      : '';
+    if (remaining) {
+      writer.sendTokens(remaining);
+    }
+
+    writer.send({ type: 'done', answer: finalAnswer });
+    // 等待队列写空后再结束响应
+    await writer.flush?.();
   } catch (e) {
-    sendSSE(res, { type: 'error', message: (e as Error).message });
+    writer.send({ type: 'error', message: (e as Error).message });
+    try { await writer.flush?.(); } catch { /* ignore */ }
   } finally {
-    res.end();
+    try { res.end(); } catch { /* ignore */ }
   }
 }
 

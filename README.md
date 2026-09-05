@@ -580,6 +580,33 @@ npm run cli -- chat --mcp tandem=https:// 你的真实-mcp服务地址/mcp
 - 需要安装 `@modelcontextprotocol/client` 包
 - 自动选择 SSE 或 StreamableHTTP 传输方式
 
+### Chrome DevTools MCP
+
+Chrome DevTools MCP 是本地 stdio 服务，不是 HTTP 服务。项目已支持通过
+`--mcp-command` 启动它：
+
+```bash
+# 首次运行会由 npx 下载 chrome-devtools-mcp；也可以先手动执行预热
+npx -y chrome-devtools-mcp@latest --help
+
+# 启动 keen-code，并注册 Chrome DevTools MCP 工具
+npm run cli -- chat \
+  --mcp-command "chrome=npx -y chrome-devtools-mcp@latest"
+```
+
+连接成功后，工具会以 `chrome__<toolName>` 的名称注册到 Agent。需要使用本地
+Chrome 和 DevTools 时，请确保 Chrome 已安装；MCP 服务启动时会按其自身配置连接或启动 Chrome。
+
+也可以在单轮模式中使用：
+
+```bash
+npm run cli -- run "打开当前页面并检查控制台错误" \
+  --mcp-command "chrome=npx -y chrome-devtools-mcp@latest"
+```
+
+`--mcp-command` 的值必须整体加引号，因为命令包含多个参数。项目使用的
+`@modelcontextprotocol/client` 已提供 stdio transport，无需额外安装 MCP 客户端包。
+
 ---
 
 ## 配置说明

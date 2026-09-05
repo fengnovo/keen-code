@@ -186,7 +186,8 @@ export class SessionRecorder {
       type: 'llm_response',
       turnId,
       data: {
-        content: content?.slice(0, 500) ?? null,
+        // 保存完整文本（不截断），保证 Web/恢复会话能看到完整的历史
+        content: content ?? null,
         contentLength: content?.length ?? 0,
         toolCallCount,
       },
@@ -232,7 +233,8 @@ export class SessionRecorder {
       timestamp: new Date().toISOString(),
       type: 'turn_end',
       turnId,
-      data: { output: output.slice(0, 500), outputLength: output.length },
+      // 保存完整输出（不截断），Web 端历史记录依赖此字段还原完整回答
+      data: { output, outputLength: output.length },
     });
   }
 

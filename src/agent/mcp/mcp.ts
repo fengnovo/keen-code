@@ -74,7 +74,56 @@ export async function connectMCP(
   // 连接并初始化 MCP 会话
   await client.connect(transport);
 
-  // 获取远程工具列表
+  return registerMCPTools(name, url, client, registry, securityOptions);
+}
+
+/** 通过 stdio 启动本地 MCP 服务并注册其工具 */
+export async function connectMCPStdio(
+  name: string,
+  command: string,
+  args: string[],
+  registry: ToolRegistry,
+  securityOptions: SecurityScanOptions = {},
+): Promise<MCPClient> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let Client: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let StdioClientTransport: any;
+  try {
+    const mcpModule = await import('@modelcontextprotocol/client');
+    const stdioModule = await import('@modelcontextprotocol/client/stdio');
+    Client = mcpModule.Client;
+    StdioClientTransport = stdioModule.StdioClientTransport;
+  } catch {
+    throw new Error(
+      '未安装 @modelcontextprotocol/client 包，请运行: npm install @modelcontextprotocol/client',
+    );
+  }
+
+  const transport = new StdioClientTransport({
+    command,
+    args,
+    stderr: 'inherit',
+  });
+  const client = new Client({ name: 'keen-code', version: '0.1.0' });
+  await client.connect(transport);
+  return registerMCPTools(
+    name,
+    `stdio://${command}`,
+    client,
+    registry,
+    securityOptions,
+  );
+}
+
+/** 获取 MCP 工具并注册到本地工具表 */
+async function registerMCPTools(
+  name: string,
+  source: string,
+  client: MCPClient,
+  registry: ToolRegistry,
+  securityOptions: SecurityScanOptions,
+): Promise<MCPClient> {
   const toolsResult = await client.listTools();
 
   console.log(`[MCP ${name}] 已连接，发现 ${toolsResult.tools.length} 个工具:`);
@@ -83,7 +132,7 @@ export async function connectMCP(
   }
 
   // 安全扫描：检查 MCP 服务器和工具的安全性（OWASP MCP Top 10）
-  const scanResult = scanMCPServer(url, toolsResult.tools);
+  const scanResult = scanMCPServer(source, toolsResult.tools);
   console.log(formatScanResult(scanResult));
 
   // 将每个远程工具包装成本地 Tool 接口并注册
@@ -176,6 +225,27 @@ export function parseMCPArgs(mcpArgs: string[]): Record<string, string> {
       const url = arg.slice(eqIndex + 1);
       servers[name] = url;
     }
+  }
+  return servers;
+}
+
+/** 解析本地 stdio MCP 参数，格式为 name=command args... */
+export function parseMCPCommandArgs(
+  mcpArgs: string[],
+): Record<string, { command: string; args: string[] }> {
+  const servers: Record<string, { command: string; args: string[] }> = {};
+  for (const arg of mcpArgs) {
+    const eqIndex = arg.indexOf('=');
+    if (eqIndex <= 0) continue;
+    const parts = arg
+      .slice(eqIndex + 1)
+      .trim()
+      .split(/\s+/);
+    if (parts[0])
+      servers[arg.slice(0, eqIndex)] = {
+        command: parts[0],
+        args: parts.slice(1),
+      };
   }
   return servers;
 }
