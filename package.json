@@ -1,0 +1,22 @@
+{
+  "name": "keen-code",
+  "version": "0.1.0",
+  "description": "A minimal Agent Harness built with Node.js + TypeScript",
+  "type": "module",
+  "scripts": {
+    "cli": "tsx src/cli.ts",
+    "chat": "tsx src/cli.ts chat",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/client": "^2.0.0",
+    "dotenv": "^16.4.5",
+    "openai": "^4.60.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.5.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.4"
+  }
+}
