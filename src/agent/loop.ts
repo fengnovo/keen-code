@@ -4,7 +4,13 @@
  * 核心流程：用户输入 → LLM 推理 → 工具执行 → 结果回传 → 循环直到完成
  */
 
-import { LLMProvider, ChatMessage, ToolCall, RunCallbacks } from './types.js';
+import {
+  LLMProvider,
+  ChatMessage,
+  ToolCall,
+  RunCallbacks,
+  ToolDefinition,
+} from './types.js';
 import { ToolRegistry } from './tools/registry.js';
 import { Sandbox } from './sandbox/sandbox.js';
 import { MemoryManager } from './memory.js';
@@ -12,7 +18,7 @@ import { SkillManager } from './skills/skills.js';
 import { ContextManager } from './context.js';
 import { SessionRecorder } from './sessions/session.js';
 
-/** 每轮最多调用 10 次工具，防止死循环 */
+/** 每轮最多调用 20 次工具，防止死循环 */
 const MAX_TOOL_CALLS_PER_TURN = 20;
 
 /** 即使底层客户端没有及时响应 AbortSignal，也要立即结束当前等待。 */
@@ -47,7 +53,6 @@ function waitWithAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T>
 
 /** Agent 运行所需的依赖项 */
 export interface AgentRunOptions {
-  mock?: boolean;
   sandbox: Sandbox;
   llm: LLMProvider;
   memory: MemoryManager;
@@ -62,11 +67,13 @@ export interface AgentRunOptions {
 export class AgentRun {
   private llm: LLMProvider;
   private tools: ToolRegistry;
+  private toolDefinitions: ToolDefinition[];
   private sandbox: Sandbox;
   private memory: MemoryManager;
   private skills: SkillManager;
   private recorder: SessionRecorder;
   private context: ContextManager;
+  private systemPrompt?: string;
   /** 对话轮次计数 */
   private turnCount: number = 0;
 
@@ -77,6 +84,7 @@ export class AgentRun {
     this.skills = options.skills;
     this.recorder = options.recorder;
     this.tools = tools;
+    this.toolDefinitions = tools.toToolDefinitions();
     this.context = new ContextManager(this.llm);
   }
 
@@ -101,21 +109,44 @@ export class AgentRun {
     signal?: AbortSignal,
     selectedSkillName?: string,
   ): Promise<string> {
+    const previousTurnCount = this.turnCount;
+    const checkpoint = this.context.createCheckpoint();
+    this.turnCount++;
+
+    try {
+      return await this.runTurn(
+        userInput,
+        callbacks,
+        signal,
+        selectedSkillName,
+      );
+    } catch (error: unknown) {
+      this.context.restoreCheckpoint(checkpoint);
+      this.turnCount = previousTurnCount;
+      throw error;
+    }
+  }
+
+  private async runTurn(
+    userInput: string,
+    callbacks?: RunCallbacks,
+    signal?: AbortSignal,
+    selectedSkillName?: string,
+  ): Promise<string> {
     const onToken = callbacks?.onToken;
     const onToolCall = callbacks?.onToolCall;
     const onToolResult = callbacks?.onToolResult;
-    this.turnCount++;
-    await this.recorder.turnStart(this.turnCount, userInput);
 
     // 第一轮时构建并注入 system prompt
-    const systemPrompt = await this.buildSystemPrompt();
     if (this.turnCount === 1) {
+      const systemPrompt = await this.getSystemPrompt();
       this.context.addMessage({
         role: 'system',
         content: systemPrompt,
       });
       await this.recorder.sessionStart(userInput);
     }
+    await this.recorder.turnStart(this.turnCount, userInput);
 
     // 显式选择 Skill 时，把完整说明仅注入本轮用户消息。
     let userMessage = userInput;
@@ -140,14 +171,14 @@ export class AgentRun {
     });
 
     // 检查是否需要压缩历史（超过 20 轮时触发）
-    await this.context.maybeCompress();
+    await this.context.maybeCompress(signal);
 
     // --- Agent 主循环 ---
     let toolCallsThisTurn = 0;
 
     while (toolCallsThisTurn < MAX_TOOL_CALLS_PER_TURN) {
       const messages = this.context.getMessages();
-      const toolDefs = this.tools.toToolDefinitions();
+      const toolDefs = this.toolDefinitions;
 
       // 调用 LLM（带流式回调）
       await this.recorder.llmCall(
@@ -181,14 +212,20 @@ export class AgentRun {
       }
 
       // 情况 2：LLM 调用了工具，先记录 assistant 消息（含 tool_calls）
+      const remainingCapacity =
+        MAX_TOOL_CALLS_PER_TURN - toolCallsThisTurn;
+      const acceptedToolCalls = response.tool_calls.slice(
+        0,
+        remainingCapacity,
+      );
       this.context.addMessage({
         role: 'assistant',
         content: response.content ?? '',
-        tool_calls: response.tool_calls,
+        tool_calls: acceptedToolCalls,
       });
 
       // 逐个执行工具调用
-      for (const toolCall of response.tool_calls) {
+      for (const toolCall of acceptedToolCalls) {
         toolCallsThisTurn++;
         if (onToolCall) onToolCall(toolCall); // 通知 CLI 层显示工具调用
 
@@ -205,7 +242,7 @@ export class AgentRun {
       }
 
       // 情况 3：如果调用了 finish 工具，直接结束本轮
-      const finishCall = response.tool_calls.find(
+      const finishCall = acceptedToolCalls.find(
         (tc: ToolCall) => tc.name === 'finish',
       );
       if (finishCall) {
@@ -215,7 +252,6 @@ export class AgentRun {
         const answer = String(
           finishAnswer || response.content || '（任务完成）',
         );
-        await this.recorder.sessionEnd(answer);
         await this.recorder.turnEnd(this.turnCount, answer);
         return answer;
       }
@@ -235,7 +271,7 @@ export class AgentRun {
 
   /** 恢复已有会话的用户和助手消息 */
   async restoreSession(messages: ChatMessage[]): Promise<void> {
-    const systemPrompt = await this.buildSystemPrompt();
+    const systemPrompt = await this.getSystemPrompt();
     this.context.replaceMessages([
       { role: 'system', content: systemPrompt },
       ...messages,
@@ -323,17 +359,15 @@ export class AgentRun {
 
   /** 获取当前完整的 system prompt（包含工作目录、记忆和技能摘要） */
   async getSystemPrompt(): Promise<string> {
-    return this.buildSystemPrompt();
+    if (this.systemPrompt === undefined) {
+      this.systemPrompt = await this.buildSystemPrompt();
+    }
+    return this.systemPrompt;
   }
 
   /** 获取会话记录器 */
   getRecorder(): SessionRecorder {
     return this.recorder;
-  }
-
-  /** 获取工具注册表 */
-  getTools(): ToolRegistry {
-    return this.tools;
   }
 
   /** 获取记忆管理器 */

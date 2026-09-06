@@ -4,12 +4,12 @@
  *
  * 管理所有可用工具，提供：
  * - 注册（register）
- * - 查询（has / get / listNames）
+ * - 查询（listNames）
  * - 执行（execute，自动用 Zod 校验参数）
  * - 生成 LLM 工具定义（toToolDefinitions，将 Zod Schema 转 JSON Schema）
  */
 
-import { z, ZodSchema } from 'zod';
+import { ZodSchema } from 'zod';
 import { ToolDefinition } from '../types.js';
 
 // ---------- 工具接口 ----------
@@ -42,16 +42,6 @@ export class ToolRegistry {
       throw new Error(`工具 ${tool.name} 已存在`);
     }
     this.tools.set(tool.name, tool);
-  }
-
-  /** 检查工具是否存在 */
-  has(name: string): boolean {
-    return this.tools.has(name);
-  }
-
-  /** 获取工具定义 */
-  get(name: string): Tool | undefined {
-    return this.tools.get(name);
   }
 
   /** 列出所有工具名称 */

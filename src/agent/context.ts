@@ -29,11 +29,8 @@ export class ContextManager {
   /** 压缩后的历史摘要 */
   private compressedSummary: string = '';
 
-  constructor(llm: LLMProvider, systemPrompt?: string) {
+  constructor(llm: LLMProvider) {
     this.llm = llm;
-    if (systemPrompt) {
-      this.messages.push({ role: 'system', content: systemPrompt });
-    }
   }
 
   /** 添加一条消息到历史 */
@@ -45,6 +42,26 @@ export class ContextManager {
   replaceMessages(messages: ChatMessage[]): void {
     this.messages = [...messages];
     this.compressedSummary = '';
+  }
+
+  /** 为单轮执行创建快照，失败或取消时可回滚上下文。 */
+  createCheckpoint(): {
+    messages: ChatMessage[];
+    compressedSummary: string;
+  } {
+    return {
+      messages: [...this.messages],
+      compressedSummary: this.compressedSummary,
+    };
+  }
+
+  /** 恢复到某轮执行前的快照。 */
+  restoreCheckpoint(checkpoint: {
+    messages: ChatMessage[];
+    compressedSummary: string;
+  }): void {
+    this.messages = [...checkpoint.messages];
+    this.compressedSummary = checkpoint.compressedSummary;
   }
 
   /**
@@ -81,11 +98,11 @@ export class ContextManager {
    * 检查是否需要压缩，如果需要则执行压缩
    * @returns 是否执行了压缩
    */
-  async maybeCompress(): Promise<boolean> {
+  async maybeCompress(signal?: AbortSignal): Promise<boolean> {
     if (this.countTurns() <= MAX_TURNS_BEFORE_COMPRESS) {
       return false;
     }
-    await this.compress();
+    await this.compress(signal);
     return true;
   }
 
@@ -96,7 +113,7 @@ export class ContextManager {
    * 3. 将旧消息交给 LLM 生成压缩摘要
    * 4. 替换消息历史为：system + 摘要 + 最近几轮
    */
-  private async compress(): Promise<void> {
+  private async compress(signal?: AbortSignal): Promise<void> {
     // 分离 system 消息和对话消息
     const systemMsgs: ChatMessage[] = [];
     const conversationMsgs: ChatMessage[] = [];
@@ -134,6 +151,7 @@ ${this.formatMessagesForSummary(toCompress)}
     const summaryResponse = await this.llm.chat(
       [{ role: 'user', content: compressPrompt }],
       [], // 压缩请求不需要工具
+      { signal },
     );
 
     const newSummary = summaryResponse.content || '（摘要生成失败）';
@@ -173,8 +191,8 @@ ${this.formatMessagesForSummary(toCompress)}
   }
 
   /** 手动触发压缩（chat 模式下 /compress 命令用） */
-  async forceCompress(): Promise<void> {
-    await this.compress();
+  async forceCompress(signal?: AbortSignal): Promise<void> {
+    await this.compress(signal);
   }
 
   /** 获取当前压缩摘要内容 */

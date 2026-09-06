@@ -15,13 +15,17 @@
  */
 
 import 'dotenv/config';
+import type { Client } from '@modelcontextprotocol/client';
 import { createLLM } from './llm.js';
 import { LocalSandbox, Sandbox } from './sandbox/sandbox.js';
 import { DockerSandbox } from './sandbox/dockerSandbox.js';
 import { MemoryManager } from './memory.js';
 import { SkillManager } from './skills/skills.js';
-import { SessionRecorder } from './sessions/session.js';
-import { loadSessionMessages } from './sessions/session.js';
+import {
+  assertValidSessionId,
+  loadSessionMessages,
+  SessionRecorder,
+} from './sessions/session.js';
 import { ToolRegistry } from './tools/registry.js';
 import {
   createRunShellTool,
@@ -58,6 +62,8 @@ export interface CreateAgentOptions {
   sessionId?: string;
   /** 是否恢复指定会话的对话历史 */
   resumeSession?: boolean;
+  /** 取消 MCP 连接等创建阶段的异步操作 */
+  signal?: AbortSignal;
 }
 
 /** MCP 在当前 Agent 中的实际状态 */
@@ -72,7 +78,7 @@ export interface CreateAgentResult {
   /** Agent 运行实例 */
   agent: AgentRun;
   /** MCP 客户端列表（用于后续清理） */
-  mcpClients: unknown[];
+  mcpClients: Client[];
   /** 沙箱实例 */
   sandbox: Sandbox;
   /** 会话 ID */
@@ -83,6 +89,36 @@ export interface CreateAgentResult {
   mcpStatuses: MCPStatus[];
   /** Agent 自带的工具名称（不包含 MCP 工具） */
   systemToolNames: string[];
+}
+
+/** 关闭 Agent 持有的 MCP 客户端和 Docker 容器。 */
+export async function disposeAgent(result: CreateAgentResult): Promise<void> {
+  await disposeResources(result.mcpClients, result.sandbox);
+}
+
+async function disposeResources(
+  mcpClients: Client[],
+  sandbox: Sandbox,
+): Promise<void> {
+  const closeTasks = mcpClients.map((client) => client.close());
+
+  if (closeTasks.length > 0) {
+    let timeout: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([
+        Promise.allSettled(closeTasks),
+        new Promise((resolve) => {
+          timeout = setTimeout(resolve, 2_000);
+        }),
+      ]);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
+  }
+
+  if (sandbox instanceof DockerSandbox) {
+    await sandbox.destroy();
+  }
 }
 
 /**
@@ -96,7 +132,7 @@ export async function createAgent(
   options: CreateAgentOptions = {},
 ): Promise<CreateAgentResult> {
   const mock = options.mock ?? false;
-  const mcpClients: unknown[] = [];
+  const mcpClients: Client[] = [];
   const mcpNames: string[] = [];
   const mcpStatuses: MCPStatus[] = (options.disabledMCPNames || []).map(
     (name) => ({ name, state: 'disabled' }),
@@ -105,6 +141,16 @@ export async function createAgent(
   const sessionId =
     options.sessionId ||
     `sess_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  assertValidSessionId(sessionId);
+
+  const duplicateMCPNames = Object.keys(options.mcpServers || {}).filter(
+    (name) => options.mcpCommands?.[name],
+  );
+  if (duplicateMCPNames.length > 0) {
+    throw new Error(
+      `以下 MCP 同时配置了远程和 stdio 连接: ${duplicateMCPNames.join(', ')}`,
+    );
+  }
 
   // 1. 创建 LLM 实例
   const llm = createLLM(mock);
@@ -149,41 +195,50 @@ export async function createAgent(
   // MCP 工具注册前保存内置工具列表，供 CLI 展示运行时配置
   const systemToolNames = toolRegistry.listNames();
 
-  // 7. 接入远程 MCP 服务（如果配置了）
-  if (options.mcpServers && Object.keys(options.mcpServers).length > 0) {
-    for (const [name, config] of Object.entries(options.mcpServers)) {
-      try {
-        const client = await connectMCP(name, config, toolRegistry);
-        mcpClients.push(client);
-        mcpNames.push(name);
-        mcpStatuses.push({ name, state: 'active' });
-      } catch (e: unknown) {
-        const error = (e as Error).message;
-        mcpStatuses.push({ name, state: 'failed', error });
-        console.error(`[MCP ${name}] 连接失败: ${error}`);
-      }
+  // 7. 并行连接 MCP，避免多个服务的启动等待累加。
+  const connectionTasks: Promise<{
+    name: string;
+    client?: Client;
+    error?: string;
+  }>[] = [];
+
+  for (const [name, config] of Object.entries(options.mcpServers || {})) {
+    connectionTasks.push(
+      connectMCP(name, config, toolRegistry, {}, options.signal).then(
+        (client) => ({ name, client }),
+        (error: unknown) => ({ name, error: (error as Error).message }),
+      ),
+    );
+  }
+  for (const [name, config] of Object.entries(options.mcpCommands || {})) {
+    connectionTasks.push(
+      connectMCPStdio(name, config, toolRegistry, {}, options.signal).then(
+        (client) => ({ name, client }),
+        (error: unknown) => ({ name, error: (error as Error).message }),
+      ),
+    );
+  }
+
+  for (const result of await Promise.all(connectionTasks)) {
+    if (result.client) {
+      mcpClients.push(result.client);
+      mcpNames.push(result.name);
+      mcpStatuses.push({ name: result.name, state: 'active' });
+    } else {
+      const error = result.error || '未知错误';
+      mcpStatuses.push({ name: result.name, state: 'failed', error });
+      console.error(`[MCP ${result.name}] 连接失败: ${error}`);
     }
   }
 
-  if (options.mcpCommands && Object.keys(options.mcpCommands).length > 0) {
-    for (const [name, config] of Object.entries(options.mcpCommands)) {
-      try {
-        const client = await connectMCPStdio(name, config, toolRegistry);
-        mcpClients.push(client);
-        mcpNames.push(name);
-        mcpStatuses.push({ name, state: 'active' });
-      } catch (e: unknown) {
-        const error = (e as Error).message;
-        mcpStatuses.push({ name, state: 'failed', error });
-        console.error(`[MCP ${name}] 连接失败: ${error}`);
-      }
-    }
+  if (options.signal?.aborted) {
+    await disposeResources(mcpClients, sandbox);
+    options.signal.throwIfAborted();
   }
 
   // 8. 创建 Agent 运行实例，注入所有依赖
   const agent = new AgentRun(
     {
-      mock,
       sandbox,
       llm,
       memory,
@@ -193,9 +248,14 @@ export async function createAgent(
     toolRegistry,
   );
 
-  if (options.resumeSession) {
-    const messages = await loadSessionMessages(sessionId);
-    await agent.restoreSession(messages);
+  try {
+    if (options.resumeSession) {
+      const messages = await loadSessionMessages(sessionId);
+      await agent.restoreSession(messages);
+    }
+  } catch (error: unknown) {
+    await disposeResources(mcpClients, sandbox);
+    throw error;
   }
 
   return {

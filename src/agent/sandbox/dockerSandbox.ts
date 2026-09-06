@@ -8,7 +8,7 @@
 import { execFile } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { projectPath } from '../../paths.js';
 import { Sandbox } from './sandbox.js';
 
 /** 默认 Docker 镜像 */
@@ -34,14 +34,10 @@ export class DockerSandbox implements Sandbox {
    * @param sessionId 会话 ID，用于创建按会话隔离的子目录
    */
   constructor(workDir?: string, image?: string, sessionId?: string) {
-    const __filename = fileURLToPath(import.meta.url);
-    const __dirname = path.dirname(__filename);
-    const projectRoot = path.resolve(__dirname, '../../..');
-
     if (workDir) {
       this.workDir = workDir;
     } else {
-      const base = path.join(projectRoot, 'workspace');
+      const base = projectPath('workspace');
       this.workDir = sessionId ? path.join(base, sessionId) : base;
     }
     this.image = image || DEFAULT_IMAGE;
@@ -183,10 +179,5 @@ export class DockerSandbox implements Sandbox {
         },
       );
     });
-  }
-
-  /** 获取容器名称 */
-  getContainerName(): string {
-    return this.containerName;
   }
 }

@@ -2,7 +2,7 @@
  * @file skills.ts
  * @description 技能系统实现
  *
- * 技能以 SKILL.md 文件形式存储在 skills/ 目录下
+ * 技能以 SKILL.md 文件形式存储在 _skills/ 目录下
  * 每个技能是一个子目录，内含 SKILL.md 描述文件
  * Agent 启动时自动加载所有技能，摘要注入 system prompt
  * AI 可通过 use_skill 工具主动读取技能的完整说明
@@ -10,7 +10,7 @@
 
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { projectPath } from '../../paths.js';
 import { Tool } from '../tools/registry.js';
 import { z } from 'zod';
 
@@ -35,10 +35,7 @@ export class SkillManager {
   private skills: Map<string, Skill> = new Map();
 
   constructor() {
-    const __filename = fileURLToPath(import.meta.url);
-    const __dirname = path.dirname(__filename);
-    const projectRoot = path.resolve(__dirname, '../../..');
-    this.skillsDir = path.join(projectRoot, '_skills');
+    this.skillsDir = projectPath('_skills');
   }
 
   /**
@@ -77,7 +74,25 @@ export class SkillManager {
    * 取第一个非标题、非代码块的段落作为描述
    */
   private extractDescription(content: string): string {
-    const lines = content.split('\n');
+    let body = content;
+    const frontmatter = content.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+    if (frontmatter) {
+      const descriptionLine = frontmatter[1]
+        .split(/\r?\n/)
+        .find((line) => /^description\s*:/.test(line));
+      if (descriptionLine) {
+        const value = descriptionLine.replace(/^description\s*:\s*/, '').trim();
+        const description = value.replace(/^(['"])(.*)\1$/, '$2').trim();
+        if (description) {
+          return description.length > 200
+            ? description.slice(0, 200) + '...'
+            : description;
+        }
+      }
+      body = content.slice(frontmatter[0].length);
+    }
+
+    const lines = body.split('\n');
     let inCodeBlock = false;
     const paragraphLines: string[] = [];
 

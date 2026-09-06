@@ -8,7 +8,7 @@
 import { execFile } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { projectPath } from '../../paths.js';
 
 // ---------- 沙箱接口 ----------
 /** 沙箱抽象接口，LocalSandbox 和 DockerSandbox 都实现此接口 */
@@ -36,27 +36,25 @@ export interface Sandbox {
  */
 export class LocalSandbox implements Sandbox {
   private workDir: string;
+  private ready: Promise<void>;
 
   /**
    * @param workDir 自定义工作目录（优先级最高）
    * @param sessionId 会话 ID，用于创建按会话隔离的子目录
    */
   constructor(workDir?: string, sessionId?: string) {
-    // 从当前文件位置推算项目根目录（src/agent/ → 上两级 → 项目根）
-    const __filename = fileURLToPath(import.meta.url);
-    const __dirname = path.dirname(__filename);
-    const projectRoot = path.resolve(__dirname, '../../..');
-
     if (workDir) {
       this.workDir = workDir;
     } else {
       // 默认：workspace/<sessionId>/，按会话隔离
-      const base = path.join(projectRoot, 'workspace');
+      const base = projectPath('workspace');
       this.workDir = sessionId ? path.join(base, sessionId) : base;
     }
 
-    // 确保工作目录存在（异步触发但不等待，mkdir recursive 通常足够快）
-    fs.mkdir(this.workDir, { recursive: true });
+    // 保留初始化 Promise，避免未等待 mkdir 造成读取/执行时序竞争。
+    this.ready = fs
+      .mkdir(this.workDir, { recursive: true })
+      .then(() => undefined);
   }
 
   /**
@@ -67,6 +65,7 @@ export class LocalSandbox implements Sandbox {
     command: string,
     signal?: AbortSignal,
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    await this.ready;
     return new Promise((resolve) => {
       execFile(
         '/bin/bash',
@@ -106,12 +105,14 @@ export class LocalSandbox implements Sandbox {
 
   /** 读取工作目录内的文件 */
   async readFile(relativePath: string): Promise<string> {
+    await this.ready;
     const fullPath = this.resolvePath(relativePath);
     return fs.readFile(fullPath, 'utf-8');
   }
 
   /** 写入工作目录内的文件（自动创建父目录） */
   async writeFile(relativePath: string, content: string): Promise<void> {
+    await this.ready;
     const fullPath = this.resolvePath(relativePath);
     await fs.mkdir(path.dirname(fullPath), { recursive: true });
     await fs.writeFile(fullPath, content, 'utf-8');

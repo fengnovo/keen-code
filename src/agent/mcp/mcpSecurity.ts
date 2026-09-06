@@ -407,54 +407,6 @@ export function scanMCPServer(
 }
 
 /**
- * 格式化扫描结果为可读文本
- */
-export function formatScanResult(result: SecurityScanResult): string {
-  const lines: string[] = [];
-  lines.push(`[安全扫描] ${result.url}`);
-  lines.push(
-    `  工具数: ${result.toolCount}, 发现问题: ${result.findings.length}`,
-  );
-
-  if (result.findings.length === 0) {
-    lines.push('  ✅ 未发现安全问题');
-    return lines.join('\n');
-  }
-
-  // 按严重级别排序
-  const order: Record<Severity, number> = {
-    critical: 0,
-    high: 1,
-    medium: 2,
-    low: 3,
-    info: 4,
-  };
-  const sorted = [...result.findings].sort(
-    (a, b) => order[a.severity] - order[b.severity],
-  );
-
-  for (const f of sorted) {
-    const icon =
-      f.severity === 'critical'
-        ? '🔴'
-        : f.severity === 'high'
-          ? '🟠'
-          : f.severity === 'medium'
-            ? '🟡'
-            : '🔵';
-    lines.push(
-      `  ${icon} [${f.id}] ${f.category} (${f.severity})${f.toolName ? ` - ${f.toolName}` : ''}`,
-    );
-    lines.push(`       ${f.message}`);
-    if (f.remediation) {
-      lines.push(`       修复: ${f.remediation}`);
-    }
-  }
-
-  return lines.join('\n');
-}
-
-/**
  * 判断工具是否应该被阻止注册
  * 根据扫描结果中该工具的 critical/high 级别问题决定
  */

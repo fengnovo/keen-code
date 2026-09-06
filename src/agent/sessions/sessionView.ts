@@ -9,14 +9,10 @@
 
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { SessionEvent } from './session.js';
+import { projectPath } from '../../paths.js';
+import { assertValidSessionId, SessionEvent } from './session.js';
 
-// 定位 sessions 根目录
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const projectRoot = path.resolve(__dirname, '../../..');
-const sessionsRoot = path.join(projectRoot, '_sessions');
+const sessionsRoot = projectPath('_sessions');
 
 /**
  * 列出所有会话记录
@@ -48,22 +44,28 @@ export async function listSessions(): Promise<void> {
         const content = await fs.readFile(runPath, 'utf-8');
         const lines = content.trim().split('\n').filter(Boolean);
 
-        // 从第一条和最后一条事件中提取摘要信息
+        // 从事件中提取首个输入和最后一次完整输出
         let firstInput = '';
         let lastOutput = '';
-        let eventCount = lines.length;
+        const eventCount = lines.length;
 
         try {
-          const firstEvent: SessionEvent = JSON.parse(lines[0]);
-          if (firstEvent.type === 'session_start') {
+          const events = lines.map((line) => JSON.parse(line) as SessionEvent);
+          const firstInputEvent = events.find(
+            (event) =>
+              event.type === 'turn_start' || event.type === 'session_start',
+          );
+          if (firstInputEvent) {
             firstInput = String(
-              (firstEvent.data as { userInput?: string }).userInput || '',
+              (firstInputEvent.data as { userInput?: string }).userInput || '',
             ).slice(0, 50);
           }
-          const lastEvent: SessionEvent = JSON.parse(lines[lines.length - 1]);
-          if (lastEvent.type === 'session_end') {
+          const lastTurnEnd = [...events]
+            .reverse()
+            .find((event) => event.type === 'turn_end');
+          if (lastTurnEnd) {
             lastOutput = String(
-              (lastEvent.data as { finalAnswer?: string }).finalAnswer || '',
+              (lastTurnEnd.data as { output?: string }).output || '',
             ).slice(0, 50);
           }
         } catch {
@@ -86,6 +88,7 @@ export async function listSessions(): Promise<void> {
 
 /** 列出指定 session 中的对话输入摘要 */
 export async function listSessionLogs(sessionId: string): Promise<void> {
+  assertValidSessionId(sessionId);
   const sessionDir = path.join(sessionsRoot, sessionId);
 
   try {
@@ -157,6 +160,8 @@ export async function showSessionTree(
   sessionId: string,
   runId: string,
 ): Promise<void> {
+  assertValidSessionId(sessionId);
+  assertValidSessionId(runId);
   const runPath = path.join(sessionsRoot, sessionId, `${runId}.jsonl`);
 
   try {

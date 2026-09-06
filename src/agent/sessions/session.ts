@@ -3,18 +3,27 @@
  * @description 会话记录器
  *
  * 将 Agent 执行的全过程记录到 JSONL 文件（每行一个 JSON 事件）
- * 包括：会话开始/结束、对话轮次、LLM 调用/响应、工具调用/结果
+ * 包括：会话开始、对话轮次、LLM 调用/响应、工具调用/结果
  *
  * 文件位置：_sessions/<sessionId>/<runId>.jsonl
- * 每个 session 一个目录，每次 agent.run() 生成一个 run 文件
+ * 每个 session 一个目录，每个 AgentRun 实例使用一个 run 文件
  *
  * 注："trace" 这个词预留给评测（eval）记录使用
  */
 
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { projectPath } from '../../paths.js';
 import { ChatMessage } from '../types.js';
+
+const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+
+/** sessionId 会进入文件路径，必须禁止斜杠、点号和其他特殊字符。 */
+export function assertValidSessionId(sessionId: string): void {
+  if (!SESSION_ID_PATTERN.test(sessionId)) {
+    throw new Error('sessionId 只能包含字母、数字、下划线和连字符');
+  }
+}
 
 /** 会话事件类型 */
 export type SessionEventType =
@@ -25,7 +34,7 @@ export type SessionEventType =
   | 'tool_result' // 工具结果
   | 'turn_end' // 一轮对话结束
   | 'session_start' // 会话开始
-  | 'session_end'; // 会话结束
+  | 'session_end'; // 仅用于兼容旧版记录
 
 /** 会话事件结构 */
 export interface SessionEvent {
@@ -43,10 +52,8 @@ export interface SessionEvent {
 export async function loadSessionMessages(
   sessionId: string,
 ): Promise<ChatMessage[]> {
-  const __filename = fileURLToPath(import.meta.url);
-  const __dirname = path.dirname(__filename);
-  const projectRoot = path.resolve(__dirname, '../../..');
-  const sessionDir = path.join(projectRoot, '_sessions', sessionId);
+  assertValidSessionId(sessionId);
+  const sessionDir = projectPath('_sessions', sessionId);
 
   let fileNames: string[];
   try {
@@ -57,32 +64,53 @@ export async function loadSessionMessages(
     return [];
   }
 
-  const events: SessionEvent[] = [];
+  const completedTurns: {
+    timestamp: string;
+    userInput: string;
+    output: string;
+  }[] = [];
   for (const fileName of fileNames) {
     const content = await fs.readFile(path.join(sessionDir, fileName), 'utf-8');
+    const pendingTurns = new Map<
+      number,
+      { timestamp: string; userInput: string }
+    >();
     for (const line of content.split('\n').filter(Boolean)) {
       try {
-        events.push(JSON.parse(line) as SessionEvent);
+        const event = JSON.parse(line) as SessionEvent;
+        if (
+          event.type === 'turn_start' &&
+          typeof event.data.userInput === 'string'
+        ) {
+          pendingTurns.set(event.turnId, {
+            timestamp: event.timestamp,
+            userInput: event.data.userInput,
+          });
+        } else if (
+          event.type === 'turn_end' &&
+          typeof event.data.output === 'string'
+        ) {
+          const start = pendingTurns.get(event.turnId);
+          if (start) {
+            completedTurns.push({
+              timestamp: start.timestamp,
+              userInput: start.userInput,
+              output: event.data.output,
+            });
+            pendingTurns.delete(event.turnId);
+          }
+        }
       } catch {
         // 忽略不完整的 JSONL 行，避免单条损坏记录阻止恢复整个会话
       }
     }
   }
 
-  events.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+  completedTurns.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
   const messages: ChatMessage[] = [];
-  for (const event of events) {
-    if (
-      event.type === 'turn_start' &&
-      typeof event.data.userInput === 'string'
-    ) {
-      messages.push({ role: 'user', content: event.data.userInput });
-    } else if (
-      event.type === 'turn_end' &&
-      typeof event.data.output === 'string'
-    ) {
-      messages.push({ role: 'assistant', content: event.data.output });
-    }
+  for (const turn of completedTurns) {
+    messages.push({ role: 'user', content: turn.userInput });
+    messages.push({ role: 'assistant', content: turn.output });
   }
   return messages;
 }
@@ -96,18 +124,13 @@ export class SessionRecorder {
   private runId: string;
   private sessionDir: string;
   private filePath: string;
-  /** 当前轮次 */
-  private currentTurn: number = 0;
 
   constructor(sessionId?: string, runId?: string) {
     this.sessionId = sessionId || this.generateId('sess');
     this.runId = runId || this.generateId('run');
+    assertValidSessionId(this.sessionId);
 
-    // 定位 sessions 目录
-    const __filename = fileURLToPath(import.meta.url);
-    const __dirname = path.dirname(__filename);
-    const projectRoot = path.resolve(__dirname, '../../..');
-    this.sessionDir = path.join(projectRoot, '_sessions', this.sessionId);
+    this.sessionDir = projectPath('_sessions', this.sessionId);
     this.filePath = path.join(this.sessionDir, `${this.runId}.jsonl`);
   }
 
@@ -140,19 +163,8 @@ export class SessionRecorder {
     });
   }
 
-  /** 记录会话结束 */
-  async sessionEnd(finalAnswer: string): Promise<void> {
-    await this.writeEvent({
-      timestamp: new Date().toISOString(),
-      type: 'session_end',
-      turnId: this.currentTurn,
-      data: { finalAnswer },
-    });
-  }
-
   /** 记录一轮对话开始 */
   async turnStart(turnId: number, userInput?: string): Promise<void> {
-    this.currentTurn = turnId;
     await this.writeEvent({
       timestamp: new Date().toISOString(),
       type: 'turn_start',
@@ -175,7 +187,7 @@ export class SessionRecorder {
     });
   }
 
-  /** 记录 LLM 响应（内容前 500 字、内容长度、工具调用数） */
+  /** 记录 LLM 响应（完整内容、内容长度、工具调用数） */
   async llmResponse(
     turnId: number,
     content: string | null,
@@ -227,7 +239,7 @@ export class SessionRecorder {
     });
   }
 
-  /** 记录一轮对话结束（输出前 500 字、输出长度） */
+  /** 记录一轮对话结束（完整输出和输出长度） */
   async turnEnd(turnId: number, output: string): Promise<void> {
     await this.writeEvent({
       timestamp: new Date().toISOString(),
@@ -241,11 +253,6 @@ export class SessionRecorder {
   /** 获取会话 ID */
   getSessionId(): string {
     return this.sessionId;
-  }
-
-  /** 获取运行 ID（每次 agent.run 一个） */
-  getRunId(): string {
-    return this.runId;
   }
 
   /** 获取记录文件路径 */

@@ -4,16 +4,19 @@
  *
  * 分为两层：
  * - 短期记忆：Map 结构，只在当前 session 内有效，会话结束即消失
- * - 长期记忆：持久化到 memory/long_term.json，跨会话保留
+ * - 长期记忆：持久化到 _memory/long_term.json，跨会话保留
  *
  * 同时提供 3 个记忆工具供 AI 调用：remember、remember_longterm、recall
  */
 
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { projectPath } from '../paths.js';
 import { Tool } from './tools/registry.js';
 import { z } from 'zod';
+
+/** 多个 Agent 共享同一文件，串行化读-改-写以避免覆盖。 */
+let longTermWriteQueue: Promise<void> = Promise.resolve();
 
 /** 记忆条目 */
 export interface MemoryEntry {
@@ -32,14 +35,11 @@ export class MemoryManager {
   private shortTerm: Map<string, string> = new Map();
   /** 长期记忆文件路径 */
   private longTermPath: string;
+  private ready: Promise<void>;
 
   constructor() {
-    // 从当前文件位置推算项目根目录，定位 _memory/ 目录
-    const __filename = fileURLToPath(import.meta.url);
-    const __dirname = path.dirname(__filename);
-    const projectRoot = path.resolve(__dirname, '../..');
-    const memoryDir = path.join(projectRoot, '_memory');
-    fs.mkdir(memoryDir, { recursive: true });
+    const memoryDir = projectPath('_memory');
+    this.ready = fs.mkdir(memoryDir, { recursive: true }).then(() => undefined);
     this.longTermPath = path.join(memoryDir, 'long_term.json');
   }
 
@@ -48,11 +48,6 @@ export class MemoryManager {
   /** 写入短期记忆 */
   rememberShort(key: string, value: string): void {
     this.shortTerm.set(key, value);
-  }
-
-  /** 读取单条短期记忆 */
-  getShort(key: string): string | undefined {
-    return this.shortTerm.get(key);
   }
 
   /** 获取所有短期记忆条目 */
@@ -68,6 +63,7 @@ export class MemoryManager {
 
   /** 从文件加载长期记忆 */
   private async loadLongTerm(): Promise<MemoryEntry[]> {
+    await this.ready;
     try {
       const content = await fs.readFile(this.longTermPath, 'utf-8');
       return JSON.parse(content);
@@ -78,11 +74,14 @@ export class MemoryManager {
 
   /** 保存长期记忆到文件 */
   private async saveLongTerm(entries: MemoryEntry[]): Promise<void> {
+    await this.ready;
+    const temporaryPath = `${this.longTermPath}.${process.pid}.tmp`;
     await fs.writeFile(
-      this.longTermPath,
+      temporaryPath,
       JSON.stringify(entries, null, 2),
       'utf-8',
     );
+    await fs.rename(temporaryPath, this.longTermPath);
   }
 
   /**
@@ -90,15 +89,19 @@ export class MemoryManager {
    * 如果 key 已存在则更新，否则新增
    */
   async rememberLong(key: string, value: string): Promise<void> {
-    const entries = await this.loadLongTerm();
-    const existing = entries.findIndex((e) => e.key === key);
-    if (existing >= 0) {
-      entries[existing].value = value;
-      entries[existing].createdAt = new Date().toISOString();
-    } else {
-      entries.push({ key, value, createdAt: new Date().toISOString() });
-    }
-    await this.saveLongTerm(entries);
+    const operation = longTermWriteQueue.then(async () => {
+      const entries = await this.loadLongTerm();
+      const existing = entries.findIndex((e) => e.key === key);
+      if (existing >= 0) {
+        entries[existing].value = value;
+        entries[existing].createdAt = new Date().toISOString();
+      } else {
+        entries.push({ key, value, createdAt: new Date().toISOString() });
+      }
+      await this.saveLongTerm(entries);
+    });
+    longTermWriteQueue = operation.catch(() => undefined);
+    await operation;
   }
 
   /**

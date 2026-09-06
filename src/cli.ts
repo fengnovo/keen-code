@@ -12,7 +12,11 @@
  */
 
 import 'dotenv/config';
-import { createAgent, CreateAgentResult } from './agent/agent.js';
+import {
+  createAgent,
+  CreateAgentResult,
+  disposeAgent,
+} from './agent/agent.js';
 import {
   listSessions,
   listSessionLogs,
@@ -24,7 +28,6 @@ import {
   MCPRemoteServerConfig,
   MCPStdioServerConfig,
 } from './agent/mcp/mcpConfig.js';
-import { DockerSandbox } from './agent/sandbox/dockerSandbox.js';
 import { ToolCall, RunCallbacks } from './agent/types.js';
 import { LoadingIndicator } from './utils/loading.js';
 import { spawn } from 'node:child_process';
@@ -48,34 +51,6 @@ interface ChatCommandResult {
   switchedAgent?: CreateAgentResult;
   selectedSkillName?: string;
   userInput?: string;
-}
-
-/** 关闭一个 Agent 持有的 MCP/Docker 资源，避免 CLI 退出后残留子进程。 */
-async function closeAgentResources(current: CreateAgentResult): Promise<void> {
-  const closeTasks = current.mcpClients.map(async (client) => {
-    const closable = client as { close?: () => unknown };
-    if (typeof closable.close === 'function') {
-      await closable.close();
-    }
-  });
-
-  if (closeTasks.length > 0) {
-    await new Promise<void>((resolve) => {
-      let settled = false;
-      const done = (): void => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        resolve();
-      };
-      const timer = setTimeout(done, 2_000);
-      Promise.allSettled(closeTasks).then(done);
-    });
-  }
-
-  if (current.sandbox instanceof DockerSandbox) {
-    await current.sandbox.destroy();
-  }
 }
 
 /** 加载 .mcp.json，并用命令行中的同名 MCP 配置覆盖它 */
@@ -143,7 +118,7 @@ function formatToolCall(toolCall: ToolCall): string {
  * 格式化工具结果为可读字符串
  * 超过 500 字符的结果会被截断
  */
-function formatToolResult(toolName: string, result: unknown): string {
+function formatToolResult(result: unknown): string {
   const str = JSON.stringify(result, null, 2);
   const truncated = str.length > 500 ? str.slice(0, 497) + '...' : str;
   return truncated;
@@ -172,9 +147,9 @@ function createRunCallbacks(loading: LoadingIndicator): RunCallbacks {
       process.stdout.write(`\n  [工具调用] ${formatToolCall(toolCall)}\n`);
       loading.start('工具执行中');
     },
-    onToolResult: (toolName: string, result: unknown) => {
+    onToolResult: (_toolName: string, result: unknown) => {
       loading.stop();
-      const formatted = formatToolResult(toolName, result);
+      const formatted = formatToolResult(result);
       process.stdout.write(`  [工具结果] ${formatted}\n\n`);
       loading.start('AI 思考中');
     },
@@ -404,7 +379,7 @@ async function runCommand(
     const recorder = agent.getRecorder();
     console.log(`\n[会话记录已保存: ${recorder.getFilePath()}]`);
   } finally {
-    await closeAgentResources(current);
+    await disposeAgent(current);
   }
 }
 
@@ -506,7 +481,7 @@ async function chatCommand(
           disabledMCPNames,
         });
         if (commandResult?.switchedAgent) {
-          await closeAgentResources(current);
+          await disposeAgent(current);
           current = commandResult.switchedAgent;
           pendingSkillName = undefined;
           rl.setPrompt('你> ');
@@ -563,7 +538,7 @@ async function chatCommand(
     isClosing = true;
     rl.removeListener('SIGINT', handleSigint);
     process.removeListener('SIGINT', handleSigint);
-    await closeAgentResources(current);
+    await disposeAgent(current);
     console.log('\n再见！');
     process.exit(0);
   });

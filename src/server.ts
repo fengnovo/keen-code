@@ -16,98 +16,36 @@ import 'dotenv/config';
 import http from 'node:http';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { createAgent } from './agent/agent.js';
+import {
+  createAgent,
+  CreateAgentResult,
+  disposeAgent,
+} from './agent/agent.js';
+import { assertValidSessionId } from './agent/sessions/session.js';
 import type { ToolCall } from './agent/types.js';
+import { projectPath } from './paths.js';
 
 const PORT = Number(process.env.KEEN_CODE_PORT || process.env.PORT || 8787);
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const projectRoot = path.resolve(__dirname, '..');
-const sessionsRoot = path.join(projectRoot, '_sessions');
-const workspaceRoot = path.join(projectRoot, 'workspace');
+const sessionsRoot = projectPath('_sessions');
+const workspaceRoot = projectPath('workspace');
 
 /** 进程内长驻的 Agent 会话实例 */
 interface AgentHolder {
-  agent: Awaited<ReturnType<typeof createAgent>>['agent'];
-  sandbox: Awaited<ReturnType<typeof createAgent>>['sandbox'];
+  runtime: CreateAgentResult;
   mock: boolean;
 }
 const agents = new Map<string, AgentHolder>();
+const activeRuns = new Map<string, AbortController>();
 
 /** 发送一条 SSE data 事件 */
 function sendSSE(
   res: http.ServerResponse,
   obj: Record<string, unknown>,
 ): void {
+  if (res.destroyed || res.writableEnded) return;
   res.write(`data: ${JSON.stringify(obj)}\n\n`);
 }
-
-/**
- * 有序 SSE 写入器：所有事件都走同一条 Promise 队列，保证
- * token / tool_call / done 等事件顺序不被打乱。
- * sendTokens 会把较大的一段文本切成小片按时间间隔下发，
- * 使「finish 一次性返回」「非流式兜底」等场景也能在页面上看到逐字流式输出。
- */
-function createSSEWriter(res: http.ServerResponse) {
-  let chain: Promise<void> = Promise.resolve();
-
-  /** 队列化一个写任务（串行执行，异常不阻断后续） */
-  function enqueue(task: () => Promise<void> | void): void {
-    chain = chain.then(async () => {
-      await task();
-    }).catch(() => undefined);
-  }
-
-  return {
-    /** 立即（按队列顺序）发送一个事件对象 */
-    send(obj: Record<string, unknown>): void {
-      enqueue(() => {
-        try { sendSSE(res, obj); } catch { /* ignore */ }
-      });
-    },
-    /**
-     * 发送一段 assistant 文本：
-     *  - 文本很短（<= maxPiece）：直接作为一个 token 事件，不加额外延迟；
-     *  - 文本较长：切成 maxPiece 字符的小片，每片间隔 delayMs 下发，模拟流式。
-     * @returns 该段文本按码点计的长度（供统计已流式输出字符数）
-     */
-    sendTokens(text: string, delayMs = 12, maxPiece = 8): number {
-      const chars = Array.from(text); // 按码点切分，避免截断代理对
-      if (chars.length === 0) return 0;
-      if (chars.length <= maxPiece) {
-        const payload = JSON.stringify({ type: 'token', content: text });
-        enqueue(() => {
-          try { res.write(`data: ${payload}\n\n`); } catch { /* ignore */ }
-        });
-        return chars.length;
-      }
-      const pieces: string[] = [];
-      for (let i = 0; i < chars.length; i += maxPiece) {
-        pieces.push(chars.slice(i, i + maxPiece).join(''));
-      }
-      let flush: Promise<void> = Promise.resolve();
-      for (const piece of pieces) {
-        const payload = JSON.stringify({ type: 'token', content: piece });
-        flush = flush.then(
-          () =>
-            new Promise<void>((resolve) => {
-              try { res.write(`data: ${payload}\n\n`); } catch { /* ignore */ }
-              setTimeout(resolve, delayMs);
-            }),
-        );
-      }
-      enqueue(() => flush);
-      return chars.length;
-    },
-    /** 等待队列中的全部写入完成 */
-    flush(): Promise<void> {
-      return chain;
-    },
-  };
-}
-
 
 function readBody(req: http.IncomingMessage): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
@@ -134,19 +72,25 @@ function readBody(req: http.IncomingMessage): Promise<Record<string, unknown>> {
 async function getOrCreateAgent(
   sessionId: string,
   mock: boolean,
+  signal: AbortSignal,
 ): Promise<AgentHolder> {
   const existing = agents.get(sessionId);
   // mock 模式切换时重建
   if (existing && existing.mock === mock) return existing;
 
+  if (existing) {
+    await disposeAgent(existing.runtime);
+    agents.delete(sessionId);
+  }
+
   const created = await createAgent({
     sessionId,
     mock,
     resumeSession: true, // 有历史则恢复，无历史则为空
+    signal,
   });
   const holder: AgentHolder = {
-    agent: created.agent,
-    sandbox: created.sandbox,
+    runtime: created,
     mock,
   };
   agents.set(sessionId, holder);
@@ -176,6 +120,26 @@ async function handleChat(
     res.end(JSON.stringify({ error: 'sessionId 和 message 不能为空' }));
     return;
   }
+  try {
+    assertValidSessionId(sessionId);
+  } catch (error: unknown) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: (error as Error).message }));
+    return;
+  }
+
+  if (activeRuns.has(sessionId)) {
+    res.writeHead(409, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: '该会话正在处理上一条消息' }));
+    return;
+  }
+
+  const requestController = new AbortController();
+  activeRuns.set(sessionId, requestController);
+  const handleDisconnect = (): void => {
+    if (!res.writableEnded) requestController.abort();
+  };
+  res.once('close', handleDisconnect);
 
   res.writeHead(200, {
     'Content-Type': 'text/event-stream; charset=utf-8',
@@ -186,57 +150,58 @@ async function handleChat(
   });
   res.write(': connected\n\n');
 
-  const writer = createSSEWriter(res);
-
   try {
-    const holder = await getOrCreateAgent(sessionId, mock);
+    const holder = await getOrCreateAgent(
+      sessionId,
+      mock,
+      requestController.signal,
+    );
     // agent.run 的返回值才是真正的最终回答：
     //  - 模型直接流式输出文本时，返回累计的完整 content；
     //  - 模型通过 finish 工具一次性提交 answer 时（无 token 流），
     //    返回的是 finish 的 answer 参数。绝不能忽略，否则 done 事件
     //    携带的内容会残缺，导致 Web 端历史记录不全。
     let streamed = '';
-    // 已以 token 形式下发的字符数（按码点计）
-    let streamedChars = 0;
-
-    const runAnswer = await holder.agent.run(message, {
-      onToken: (delta: string) => {
-        streamed += delta;
-        streamedChars += writer.sendTokens(delta);
+    const runAnswer = await holder.runtime.agent.run(
+      message,
+      {
+        onToken: (delta: string) => {
+          streamed += delta;
+          sendSSE(res, { type: 'token', content: delta });
+        },
+        onToolCall: (tc: ToolCall) => {
+          sendSSE(res, {
+            type: 'tool_call',
+            name: tc.name,
+            args: tc.arguments,
+          });
+        },
+        onToolResult: (toolName: string, result: unknown) => {
+          sendSSE(res, { type: 'tool_result', name: toolName, result });
+        },
       },
-      onToolCall: (tc: ToolCall) => {
-        writer.send({
-          type: 'tool_call',
-          name: tc.name,
-          args: tc.arguments,
-        });
-      },
-      onToolResult: (toolName: string, result: unknown) => {
-        writer.send({ type: 'tool_result', name: toolName, result });
-      },
-    });
+      requestController.signal,
+    );
 
     const finalAnswer = runAnswer || streamed;
 
-    // 若最终回答中还有未流式输出的部分（例如由 finish 工具一次性返回），
-    // 切成小片补发，保证页面始终能看到逐字流式效果。
-    // 仅当已流式文本是最终回答的前缀时才补发，避免中间文本与最终回答
-    // 内容不一致时在页面上重复拼接。
+    // finish 工具可能一次性返回答案，补发尚未通过 token 事件发送的部分。
     const remaining = finalAnswer.startsWith(streamed)
-      ? Array.from(finalAnswer).slice(streamedChars).join('')
+      ? finalAnswer.slice(streamed.length)
       : '';
     if (remaining) {
-      writer.sendTokens(remaining);
+      sendSSE(res, { type: 'token', content: remaining });
     }
 
-    writer.send({ type: 'done', answer: finalAnswer });
-    // 等待队列写空后再结束响应
-    await writer.flush?.();
+    sendSSE(res, { type: 'done', answer: finalAnswer });
   } catch (e) {
-    writer.send({ type: 'error', message: (e as Error).message });
-    try { await writer.flush?.(); } catch { /* ignore */ }
+    if (!requestController.signal.aborted) {
+      sendSSE(res, { type: 'error', message: (e as Error).message });
+    }
   } finally {
-    try { res.end(); } catch { /* ignore */ }
+    activeRuns.delete(sessionId);
+    res.removeListener('close', handleDisconnect);
+    if (!res.writableEnded) res.end();
   }
 }
 
@@ -245,7 +210,18 @@ async function handleDeleteSession(
   sessionId: string,
   res: http.ServerResponse,
 ): Promise<void> {
+  try {
+    assertValidSessionId(sessionId);
+  } catch (error: unknown) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: (error as Error).message }));
+    return;
+  }
+  activeRuns.get(sessionId)?.abort();
+  activeRuns.delete(sessionId);
+  const holder = agents.get(sessionId);
   agents.delete(sessionId);
+  if (holder) await disposeAgent(holder.runtime);
   const targets = [
     path.join(sessionsRoot, sessionId),
     path.join(workspaceRoot, sessionId),
@@ -316,10 +292,42 @@ const server = http.createServer((req, res) => {
   });
 });
 
+server.on('error', (error: NodeJS.ErrnoException) => {
+  if (error.code === 'EADDRINUSE') {
+    console.error(`端口 ${PORT} 已被占用，请设置 KEEN_CODE_PORT 更换端口`);
+  } else {
+    console.error(`keen-code server 启动失败: ${error.message}`);
+  }
+  process.exitCode = 1;
+});
+
 server.listen(PORT, () => {
   console.log(`keen-code server 已启动: http://127.0.0.1:${PORT}`);
   console.log(`  POST   /v1/chat              (SSE 流式对话)`);
   console.log(`  DELETE /v1/sessions/:id      (删除会话数据)`);
   console.log(`  GET    /v1/health`);
   console.log(`  真实模式使用 .env 中的 DEEPSEEK 配置；body.mock=true 走 MockLLM`);
+});
+
+let shuttingDown = false;
+async function shutdown(): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+
+  for (const controller of activeRuns.values()) controller.abort();
+  activeRuns.clear();
+  server.close();
+  server.closeAllConnections();
+
+  const runtimes = [...agents.values()].map((holder) => holder.runtime);
+  agents.clear();
+  await Promise.allSettled(runtimes.map((runtime) => disposeAgent(runtime)));
+  process.exit(0);
+}
+
+process.once('SIGINT', () => {
+  void shutdown();
+});
+process.once('SIGTERM', () => {
+  void shutdown();
 });

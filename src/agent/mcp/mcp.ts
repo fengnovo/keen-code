@@ -2,15 +2,20 @@
  * @file mcp.ts
  * @description 远程 MCP (Model Context Protocol) 接入
  *
- * 通过动态导入 @modelcontextprotocol/client 包，连接远程 MCP 服务
+ * 通过 @modelcontextprotocol/client 连接远程 MCP 服务
  * 将远程工具注册到本地 ToolRegistry，工具名加前缀避免冲突
  *
  * 用法：
  *   npm run cli -- chat --mcp tandem=https://tandem.ac/mcp
  */
 
-import { ToolRegistry } from '../tools/registry.js';
-import { Tool } from '../tools/registry.js';
+import {
+  Client,
+  SSEClientTransport,
+  StreamableHTTPClientTransport,
+} from '@modelcontextprotocol/client';
+import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
+import { Tool, ToolRegistry } from '../tools/registry.js';
 import { z } from 'zod';
 import {
   scanMCPServer,
@@ -21,11 +26,6 @@ import {
   MCPRemoteServerConfig,
   MCPStdioServerConfig,
 } from './mcpConfig.js';
-
-// MCP 客户端类型（动态导入，避免未安装时报错）
-// 使用 any 以兼容不同版本的 MCP SDK
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type MCPClient = any;
 
 /**
  * 连接一个远程 MCP 服务，将其工具注册到 ToolRegistry 中
@@ -43,32 +43,14 @@ export async function connectMCP(
   config: MCPRemoteServerConfig,
   registry: ToolRegistry,
   securityOptions: SecurityScanOptions = {},
-): Promise<MCPClient> {
-  // 动态导入 MCP SDK（未安装时报错提示）
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let Client: any;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let SSEClientTransport: any;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let StreamableHTTPClientTransport: any;
-
-  try {
-    const mcpModule = await import('@modelcontextprotocol/client');
-    Client = mcpModule.Client;
-    SSEClientTransport = mcpModule.SSEClientTransport;
-    StreamableHTTPClientTransport = mcpModule.StreamableHTTPClientTransport;
-  } catch {
-    throw new Error(
-      '未安装 @modelcontextprotocol/client 包，请运行: npm install @modelcontextprotocol/client',
-    );
-  }
-
+  signal?: AbortSignal,
+): Promise<Client> {
   const requestInit = config.headers
     ? { headers: config.headers }
     : undefined;
 
   // 显式 transport 优先；未配置时含 /sse 用 SSE，否则用 StreamableHTTP
-  let transport: unknown;
+  let transport: SSEClientTransport | StreamableHTTPClientTransport;
   if (
     config.transport === 'sse' ||
     (!config.transport && config.url.includes('/sse'))
@@ -83,16 +65,21 @@ export async function connectMCP(
   // MCP SDK 2.x API：构造函数传 clientInfo，connect 传 transport
   const client = new Client({ name: 'keen-code', version: '0.1.0' });
 
-  // 连接并初始化 MCP 会话
-  await client.connect(transport);
-
-  return registerMCPTools(
-    name,
-    config.url,
-    client,
-    registry,
-    securityOptions,
-  );
+  try {
+    // 连接并初始化 MCP 会话
+    await client.connect(transport, { signal });
+    return await registerMCPTools(
+      name,
+      config.url,
+      client,
+      registry,
+      securityOptions,
+      signal,
+    );
+  } catch (error: unknown) {
+    await client.close().catch(() => undefined);
+    throw error;
+  }
 }
 
 /** 通过 stdio 启动本地 MCP 服务并注册其工具 */
@@ -101,22 +88,8 @@ export async function connectMCPStdio(
   config: MCPStdioServerConfig,
   registry: ToolRegistry,
   securityOptions: SecurityScanOptions = {},
-): Promise<MCPClient> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let Client: any;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let StdioClientTransport: any;
-  try {
-    const mcpModule = await import('@modelcontextprotocol/client');
-    const stdioModule = await import('@modelcontextprotocol/client/stdio');
-    Client = mcpModule.Client;
-    StdioClientTransport = stdioModule.StdioClientTransport;
-  } catch {
-    throw new Error(
-      '未安装 @modelcontextprotocol/client 包，请运行: npm install @modelcontextprotocol/client',
-    );
-  }
-
+  signal?: AbortSignal,
+): Promise<Client> {
   const transport = new StdioClientTransport({
     command: config.command,
     args: config.args,
@@ -133,31 +106,35 @@ export async function connectMCPStdio(
 
   const client = new Client({ name: 'keen-code', version: '0.1.0' });
   try {
-    await client.connect(transport);
+    await client.connect(transport, { signal });
+    return await registerMCPTools(
+      name,
+      `stdio://${config.command}`,
+      client,
+      registry,
+      securityOptions,
+      signal,
+    );
   } catch (error: unknown) {
+    await client.close().catch(() => undefined);
     const details = stderrOutput.trim();
     throw new Error(
       `${(error as Error).message}${details ? `\n${details}` : ''}`,
+      { cause: error },
     );
   }
-  return registerMCPTools(
-    name,
-    `stdio://${config.command}`,
-    client,
-    registry,
-    securityOptions,
-  );
 }
 
 /** 获取 MCP 工具并注册到本地工具表 */
 async function registerMCPTools(
   name: string,
   source: string,
-  client: MCPClient,
+  client: Client,
   registry: ToolRegistry,
   securityOptions: SecurityScanOptions,
-): Promise<MCPClient> {
-  const toolsResult = await client.listTools();
+  signal?: AbortSignal,
+): Promise<Client> {
+  const toolsResult = await client.listTools(undefined, { signal });
 
   // 安全扫描：检查 MCP 服务器和工具的安全性（OWASP MCP Top 10）
   const scanResult = scanMCPServer(source, toolsResult.tools);
@@ -194,7 +171,7 @@ function createMCPToolWrapper(
   remoteName: string,
   description: string,
   inputSchema: Record<string, unknown>,
-  client: MCPClient,
+  client: Client,
 ): Tool {
   // 用 z.record(z.unknown()) 接收任意参数对象
   const schema = z.record(z.unknown());
@@ -207,25 +184,31 @@ function createMCPToolWrapper(
       type: 'object',
       ...inputSchema,
     },
-    async execute(params: Record<string, unknown>) {
+    async execute(
+      params: Record<string, unknown>,
+      signal?: AbortSignal,
+    ) {
       try {
-        const result = await client.callTool({
-          name: remoteName,
-          arguments: params,
-        });
+        const result = await client.callTool(
+          {
+            name: remoteName,
+            arguments: params,
+          },
+          { signal },
+        );
 
         // MCP 返回的 content 是数组，可能包含文本、图片等
         // 统一提取文本内容返回
         if (result.content && Array.isArray(result.content)) {
           const textParts = result.content
-            .filter((c: { type: string }) => c.type === 'text')
-            .map((c: { text?: string }) => c.text || '')
+            .flatMap((item) => (item.type === 'text' ? [item.text] : []))
             .join('\n');
           return { content: textParts, isError: result.isError || false };
         }
 
         return result;
       } catch (e: unknown) {
+        if (signal?.aborted) throw e;
         return { error: (e as Error).message };
       }
     },
