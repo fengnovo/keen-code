@@ -28,6 +28,8 @@ export interface MCPStdioServerConfig {
 export interface LoadedMCPConfig {
   mcpServers: Record<string, MCPRemoteServerConfig>;
   mcpCommands: Record<string, MCPStdioServerConfig>;
+  /** JSON 中通过 disabled: true 禁用的 MCP 名称 */
+  disabledMCPNames: string[];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -94,7 +96,7 @@ export async function loadMCPConfig(
   } catch (error: unknown) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === 'ENOENT' && !isExplicitPath) {
-      return { mcpServers: {}, mcpCommands: {} };
+      return { mcpServers: {}, mcpCommands: {}, disabledMCPNames: [] };
     }
     throw new Error(
       `无法读取 MCP 配置 ${resolvedPath}: ${(error as Error).message}`,
@@ -117,6 +119,7 @@ export async function loadMCPConfig(
   const result: LoadedMCPConfig = {
     mcpServers: {},
     mcpCommands: {},
+    disabledMCPNames: [],
   };
   const configDir = path.dirname(resolvedPath);
 
@@ -134,7 +137,10 @@ export async function loadMCPConfig(
     ) {
       throw new Error(`${location}.disabled 必须是布尔值`);
     }
-    if (rawEntry.disabled === true) continue;
+    if (rawEntry.disabled === true) {
+      result.disabledMCPNames.push(name);
+      continue;
+    }
 
     const type = rawEntry.type;
     if (type !== undefined && typeof type !== 'string') {

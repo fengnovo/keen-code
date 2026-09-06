@@ -63,12 +63,19 @@ export class MockLLM implements LLMProvider {
 export class DeepSeekLLM implements LLMProvider {
   private client: OpenAI;
   private model: string;
+  private timeoutMs: number;
 
   constructor() {
     // 从环境变量读取配置
     const apiKey = process.env.DEEPSEEK_API_KEY;
     const baseURL = process.env.DEEPSEEK_BASE_URL;
     const model = process.env.DEEPSEEK_MODEL;
+    const configuredTimeout = Number(process.env.DEEPSEEK_TIMEOUT_MS);
+    this.timeoutMs =
+      Number.isFinite(configuredTimeout) && configuredTimeout > 0
+        ? configuredTimeout
+        : 0;
+    const transportTimeout = this.timeoutMs || 2_000_000_000;
 
     if (!apiKey || apiKey === '你的key') {
       throw new Error(
@@ -76,7 +83,13 @@ export class DeepSeekLLM implements LLMProvider {
       );
     }
 
-    this.client = new OpenAI({ apiKey, baseURL });
+    this.client = new OpenAI({
+      apiKey,
+      baseURL,
+      timeout: transportTimeout,
+      // SDK 默认会重试 2 次；网络挂起时会把等待放大到约 3 倍。
+      maxRetries: 0,
+    });
     this.model = model || 'deepseek-v4-flash';
   }
 
@@ -84,11 +97,24 @@ export class DeepSeekLLM implements LLMProvider {
     return this.model;
   }
 
+  /** 只有服务端明确不接受流式请求时，才安全地回退到非流式。 */
+  private canFallbackToNonStreaming(error: unknown): boolean {
+    if (!(error instanceof OpenAI.APIError)) return false;
+    return [400, 404, 405, 415, 422, 501].includes(error.status ?? 0);
+  }
+
   async chat(
     messages: ChatMessage[],
     tools: ToolDefinition[],
     options?: ChatOptions,
   ): Promise<LLMResponse> {
+    const timeoutSignal =
+      this.timeoutMs > 0 ? AbortSignal.timeout(this.timeoutMs) : undefined;
+    const requestSignal =
+      options?.signal && timeoutSignal
+        ? AbortSignal.any([options.signal, timeoutSignal])
+        : options?.signal || timeoutSignal;
+
     // 将内部工具定义转换为 OpenAI function-calling 格式
     const openaiTools = tools.map((t) => ({
       type: 'function' as const,
@@ -142,11 +168,12 @@ export class DeepSeekLLM implements LLMProvider {
           tool_choice: openaiTools.length > 0 ? 'auto' : undefined,
           stream: true,
         },
-        { signal: options?.signal },
+        { signal: requestSignal },
       );
 
       // 逐 chunk 处理流式响应
       for await (const chunk of stream) {
+        requestSignal?.throwIfAborted();
         const delta = chunk.choices[0]?.delta;
         if (!delta) continue;
 
@@ -173,22 +200,29 @@ export class DeepSeekLLM implements LLMProvider {
         }
       }
     } catch (streamErr) {
-      if (options?.signal?.aborted) {
+      if (
+        requestSignal?.aborted ||
+        streamErr instanceof OpenAI.APIConnectionTimeoutError ||
+        streamErr instanceof OpenAI.APIUserAbortError
+      ) {
+        if (timeoutSignal?.aborted && !options?.signal?.aborted) {
+          throw new Error(`模型请求超时（${this.timeoutMs}ms）`, {
+            cause: streamErr,
+          });
+        }
         throw streamErr;
       }
-      // 流式失败：如果完全没有收到数据，标记需要回退到非流式
-      if (!content && toolCallMap.size === 0) {
+
+      // 已收到部分数据时禁止重发，避免重复执行同一个用户请求。
+      if (content || toolCallMap.size > 0) {
+        throw streamErr;
+      }
+
+      // 仅在服务端明确不支持流式协议时回退；普通网络错误直接上抛。
+      if (this.canFallbackToNonStreaming(streamErr)) {
         streamFailed = true;
       } else {
-        // 部分内容已收到，但工具调用信息不完整时也回退
-        if (
-          toolCallMap.size > 0 &&
-          !Array.from(toolCallMap.values()).every((e) => e.id && e.name)
-        ) {
-          streamFailed = true;
-          content = '';
-          toolCallMap.clear();
-        }
+        throw streamErr;
       }
     }
 
@@ -202,7 +236,7 @@ export class DeepSeekLLM implements LLMProvider {
           tools: openaiTools.length > 0 ? openaiTools : undefined,
           tool_choice: openaiTools.length > 0 ? 'auto' : undefined,
         },
-        { signal: options?.signal },
+        { signal: requestSignal },
       );
 
       const choice = response.choices[0];

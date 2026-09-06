@@ -25,9 +25,12 @@ import {
   MCPStdioServerConfig,
 } from './agent/mcp/mcpConfig.js';
 import { DockerSandbox } from './agent/sandbox/dockerSandbox.js';
-import { AgentRun } from './agent/loop.js';
 import { ToolCall, RunCallbacks } from './agent/types.js';
 import { LoadingIndicator } from './utils/loading.js';
+import { spawn } from 'node:child_process';
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import * as readline from 'node:readline';
 
 /** 将名称列表格式化为单行，空列表显示“无” */
@@ -38,6 +41,41 @@ function formatNameList(names: string[]): string {
 interface RuntimeMCPConfig {
   mcpServers: Record<string, MCPRemoteServerConfig>;
   mcpCommands: Record<string, MCPStdioServerConfig>;
+  disabledMCPNames: string[];
+}
+
+interface ChatCommandResult {
+  switchedAgent?: CreateAgentResult;
+  selectedSkillName?: string;
+  userInput?: string;
+}
+
+/** 关闭一个 Agent 持有的 MCP/Docker 资源，避免 CLI 退出后残留子进程。 */
+async function closeAgentResources(current: CreateAgentResult): Promise<void> {
+  const closeTasks = current.mcpClients.map(async (client) => {
+    const closable = client as { close?: () => unknown };
+    if (typeof closable.close === 'function') {
+      await closable.close();
+    }
+  });
+
+  if (closeTasks.length > 0) {
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const done = (): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve();
+      };
+      const timer = setTimeout(done, 2_000);
+      Promise.allSettled(closeTasks).then(done);
+    });
+  }
+
+  if (current.sandbox instanceof DockerSandbox) {
+    await current.sandbox.destroy();
+  }
 }
 
 /** 加载 .mcp.json，并用命令行中的同名 MCP 配置覆盖它 */
@@ -71,7 +109,15 @@ async function resolveMCPConfig(
   for (const name of Object.keys(cliServers)) delete mcpCommands[name];
   for (const name of Object.keys(cliCommands)) delete mcpServers[name];
 
-  return { mcpServers, mcpCommands };
+  const cliNames = new Set([
+    ...Object.keys(cliServers),
+    ...Object.keys(cliCommands),
+  ]);
+  const disabledMCPNames = fileConfig.disabledMCPNames.filter(
+    (name) => !cliNames.has(name),
+  );
+
+  return { mcpServers, mcpCommands, disabledMCPNames };
 }
 
 /**
@@ -135,6 +181,110 @@ function createRunCallbacks(loading: LoadingIndicator): RunCallbacks {
   };
 }
 
+/** 把 npx skills 安装到临时目录的结果复制进项目 _skills/ */
+async function copySkillsFromStaging(stagingDir: string): Promise<string[]> {
+  const stagingSkillsDir = path.join(stagingDir, '.agents', 'skills');
+  let entries;
+  try {
+    entries = await fs.readdir(stagingSkillsDir, { withFileTypes: true });
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
+  }
+
+  const skillNames = entries
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort();
+  if (skillNames.length === 0) return [];
+
+  const targetRoot = path.resolve(process.cwd(), '_skills');
+  const existing: string[] = [];
+  for (const name of skillNames) {
+    try {
+      await fs.access(path.join(targetRoot, name));
+      existing.push(name);
+    } catch {
+      // 目标不存在，可以安装。
+    }
+  }
+  if (existing.length > 0) {
+    throw new Error(
+      `以下 Skill 已存在，未执行覆盖: ${existing.join(', ')}`,
+    );
+  }
+
+  await fs.mkdir(targetRoot, { recursive: true });
+  for (const name of skillNames) {
+    await fs.cp(
+      path.join(stagingSkillsDir, name),
+      path.join(targetRoot, name),
+      { recursive: true, errorOnExist: true, force: false },
+    );
+  }
+
+  return skillNames;
+}
+
+/** 通过 npx skills 获取 Skill，并安装到当前项目的 _skills/ */
+async function skillAddCommand(source: string): Promise<void> {
+  if (!source) {
+    throw new Error(
+      '用法: npm run cli -- skill add <owner/repo 或 URL>',
+    );
+  }
+
+  const npxCommand = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+  const stagingDir = await fs.mkdtemp(
+    path.join(os.tmpdir(), 'keen-code-skill-'),
+  );
+
+  try {
+    const exitCode = await new Promise<number>((resolve, reject) => {
+      const child = spawn(
+        npxCommand,
+        [
+          'skills',
+          'add',
+          source,
+          '--agent',
+          'promptscript',
+          '--copy',
+        ],
+        {
+          cwd: stagingDir,
+          env: process.env,
+          stdio: 'inherit',
+        },
+      );
+
+      child.once('error', reject);
+      child.once('close', (code, signal) => {
+        if (signal) {
+          reject(new Error(`npx skills add 被信号 ${signal} 终止`));
+          return;
+        }
+        resolve(code ?? 1);
+      });
+    });
+
+    if (exitCode !== 0) {
+      throw new Error(`npx skills add 执行失败，退出码: ${exitCode}`);
+    }
+
+    const installedSkills = await copySkillsFromStaging(stagingDir);
+    if (installedSkills.length === 0) {
+      console.log('未安装任何 Skill。');
+      return;
+    }
+
+    console.log(`\n已安装到 ${path.resolve(process.cwd(), '_skills')}:`);
+    for (const name of installedSkills) console.log(`  - ${name}`);
+  } finally {
+    await fs.rm(stagingDir, { recursive: true, force: true });
+  }
+}
+
 /**
  * 解析命令行参数
  * 支持位置参数和 --flag 选项
@@ -188,6 +338,7 @@ keen-code - 一个最小的 Agent Harness
 命令:
   run <message>        单轮对话，输入消息，输出回答
   chat                 交互式对话模式
+  skill add <source>   通过 npx skills 安装到项目 _skills/
   session list           列出所有 会话记录
   session tree <sid> <tid>  以树状结构查看单个 run
   help                 显示此帮助信息
@@ -204,6 +355,8 @@ keen-code - 一个最小的 Agent Harness
   npm run cli -- run "你好"
   npm run cli -- run "你好" --mock
   npm run chat
+  npm run cli -- skill add <owner/repo>
+  npm run cli -- skill add https://modelscope.cn/skills/@anthropics/skill-creator
   npm run cli -- chat --sandbox docker
   npm run cli -- session list
   npm run cli -- session tree sess_xxx run_xxx
@@ -222,34 +375,36 @@ async function runCommand(
 ): Promise<void> {
   const mock = flags.mock === true;
   const sandboxType = (flags.sandbox as string) || 'local';
-  const { mcpServers, mcpCommands } = await resolveMCPConfig(flags);
+  const { mcpServers, mcpCommands, disabledMCPNames } =
+    await resolveMCPConfig(flags);
 
-  const { agent, sandbox, sessionId } = await createAgent({
+  const current = await createAgent({
     mock,
     sandboxType: sandboxType as 'local' | 'docker',
     mcpServers,
     mcpCommands,
+    disabledMCPNames,
   });
+  const { agent, sandbox } = current;
 
-  console.log(`> ${message}\n`);
-  console.log(`[工作目录: ${sandbox.getWorkDir()}]\n`);
-
-  // 流式输出 AI 回答
-  const loading = new LoadingIndicator();
-  loading.start('AI 思考中');
   try {
-    await agent.run(message, createRunCallbacks(loading));
+    console.log(`> ${message}\n`);
+    console.log(`[工作目录: ${sandbox.getWorkDir()}]\n`);
+
+    // 流式输出 AI 回答
+    const loading = new LoadingIndicator();
+    loading.start('AI 思考中');
+    try {
+      await agent.run(message, createRunCallbacks(loading));
+    } finally {
+      loading.stop();
+    }
+    console.log('\n');
+
+    const recorder = agent.getRecorder();
+    console.log(`\n[会话记录已保存: ${recorder.getFilePath()}]`);
   } finally {
-    loading.stop();
-  }
-  console.log('\n');
-
-  const recorder = agent.getRecorder();
-  console.log(`\n[会话记录已保存: ${recorder.getFilePath()}]`);
-
-  // 清理 Docker 容器
-  if (sandbox instanceof DockerSandbox) {
-    await sandbox.destroy();
+    await closeAgentResources(current);
   }
 }
 
@@ -263,13 +418,15 @@ async function chatCommand(
 ): Promise<void> {
   const mock = flags.mock === true;
   const sandboxType = (flags.sandbox as string) || 'local';
-  const { mcpServers, mcpCommands } = await resolveMCPConfig(flags);
+  const { mcpServers, mcpCommands, disabledMCPNames } =
+    await resolveMCPConfig(flags);
 
   let current = await createAgent({
     mock,
     sandboxType: sandboxType as 'local' | 'docker',
     mcpServers,
     mcpCommands,
+    disabledMCPNames,
   });
 
   const skillNames = current.agent
@@ -291,11 +448,18 @@ async function chatCommand(
     prompt: '你> ',
   });
   let isClosing = false;
+  let isRequestRunning = false;
   let activeRequest: AbortController | undefined;
+  let pendingSkillName: string | undefined;
 
   rl.prompt();
 
+  let lastSigintAt = 0;
   const handleSigint = (): void => {
+    const now = Date.now();
+    if (now - lastSigintAt < 50) return;
+    lastSigintAt = now;
+
     if (activeRequest && !activeRequest.signal.aborted) {
       activeRequest.abort();
       console.log('\n已暂停当前请求，再次按 Ctrl+C 退出。');
@@ -303,17 +467,30 @@ async function chatCommand(
       rl.close();
     }
   };
+  rl.on('SIGINT', handleSigint);
   process.on('SIGINT', handleSigint);
 
   rl.on('line', async (line) => {
-    const input = line.trim();
+    let input = line.trim();
     if (!input) {
       rl.prompt();
       return;
     }
 
-    // Agent 运行期间暂停 readline，避免流式输出与当前输入提示互相覆盖
-    rl.pause();
+    if (isRequestRunning) {
+      console.log('当前请求仍在处理中，按 Ctrl+C 可立即暂停。');
+      return;
+    }
+
+    let selectedSkillName: string | undefined;
+    if (pendingSkillName && !input.startsWith('/')) {
+      selectedSkillName = pendingSkillName;
+      pendingSkillName = undefined;
+      rl.setPrompt('你> ');
+    }
+
+    // 保持 readline 活跃，确保请求期间 Ctrl+C 仍能被捕获。
+    isRequestRunning = true;
     readline.clearLine(process.stdout, 0);
     readline.cursorTo(process.stdout, 0);
 
@@ -321,21 +498,34 @@ async function chatCommand(
     try {
       // 处理内置命令（以 / 开头）
       if (input.startsWith('/')) {
-        const switched = await handleChatCommand(input, current.agent, rl, {
+        const commandResult = await handleChatCommand(input, current, rl, {
           mock,
           sandboxType: sandboxType as 'local' | 'docker',
           mcpServers,
           mcpCommands,
+          disabledMCPNames,
         });
-        if (switched) {
-          if (current.sandbox instanceof DockerSandbox) {
-            await current.sandbox.destroy();
-          }
-          current = switched;
+        if (commandResult?.switchedAgent) {
+          await closeAgentResources(current);
+          current = commandResult.switchedAgent;
+          pendingSkillName = undefined;
+          rl.setPrompt('你> ');
           console.log(`已切换到会话: ${current.sessionId}`);
           console.log(`工作目录: ${current.sandbox.getWorkDir()}`);
         }
-        return;
+
+        if (commandResult?.selectedSkillName) {
+          if (commandResult.userInput) {
+            selectedSkillName = commandResult.selectedSkillName;
+            input = commandResult.userInput;
+          } else {
+            pendingSkillName = commandResult.selectedSkillName;
+            rl.setPrompt(`你[${pendingSkillName}]> `);
+            return;
+          }
+        } else {
+          return;
+        }
       }
 
       // 正常对话（流式输出 + 工具调用展示）
@@ -348,6 +538,7 @@ async function chatCommand(
           input,
           createRunCallbacks(loading),
           requestController.signal,
+          selectedSkillName,
         );
       } finally {
         if (activeRequest === requestController) activeRequest = undefined;
@@ -361,8 +552,8 @@ async function chatCommand(
         console.error(`\n错误: ${(e as Error).message}\n`);
       }
     } finally {
+      isRequestRunning = false;
       if (!isClosing) {
-        rl.resume();
         rl.prompt();
       }
     }
@@ -370,11 +561,9 @@ async function chatCommand(
 
   rl.on('close', async () => {
     isClosing = true;
+    rl.removeListener('SIGINT', handleSigint);
     process.removeListener('SIGINT', handleSigint);
-    // 退出时清理 Docker 容器
-    if (current.sandbox instanceof DockerSandbox) {
-      await current.sandbox.destroy();
-    }
+    await closeAgentResources(current);
     console.log('\n再见！');
     process.exit(0);
   });
@@ -382,19 +571,21 @@ async function chatCommand(
 
 /**
  * 处理 chat 模式下的内置命令
- * 支持 /exit /help /session /compress /memory /skills
+ * 支持 /exit /help /model /mcp /session /compress /memory /skills
  */
 async function handleChatCommand(
   input: string,
-  agent: AgentRun,
+  current: CreateAgentResult,
   rl: readline.Interface,
   options: {
     mock: boolean;
     sandboxType: 'local' | 'docker';
     mcpServers: Record<string, MCPRemoteServerConfig>;
     mcpCommands: Record<string, MCPStdioServerConfig>;
+    disabledMCPNames: string[];
   },
-): Promise<CreateAgentResult | undefined> {
+): Promise<ChatCommandResult | undefined> {
+  const agent = current.agent;
   const parts = input.split(/\s+/);
   const cmd = parts[0];
 
@@ -408,6 +599,10 @@ async function handleChatCommand(
         `
 内置命令:
   /exit              退出
+  /model             查看当前模型名称
+  /mcp               查看所有 MCP 及生效状态
+  /skills                     查看所有已加载 Skill
+  /skills <名称或序号> [消息]  选择 Skill，并在本行或下一行聊天
   /session            查看当前会话记录路径
   /session <sid>      切换到指定会话并恢复历史
   /session list       列出所有会话
@@ -415,12 +610,37 @@ async function handleChatCommand(
   /log                查看当前会话的对话列表
   /compress          手动压缩对话历史
   /memory            查看当前记忆
-  /skills            列出可用技能
 
 对话进行中按 Ctrl+C 暂停当前请求，再按一次 Ctrl+C 退出
 `.trim(),
       );
       break;
+
+    case '/model':
+      console.log(`当前模型: ${agent.getModelName()}`);
+      break;
+
+    case '/mcp': {
+      const statuses = [...current.mcpStatuses].sort((a, b) =>
+        a.name.localeCompare(b.name),
+      );
+      if (statuses.length === 0) {
+        console.log('暂无 MCP 配置。');
+      } else {
+        console.log(`\nMCP (${statuses.length} 个):`);
+        for (const status of statuses) {
+          const label =
+            status.state === 'active'
+              ? '已生效'
+              : status.state === 'disabled'
+                ? '未生效（已禁用）'
+                : '未生效（连接失败）';
+          console.log(`  - ${status.name}: ${label}`);
+        }
+        console.log('');
+      }
+      break;
+    }
 
     case '/session': {
       if (parts[1] === 'list') {
@@ -428,11 +648,13 @@ async function handleChatCommand(
       } else if (parts[1] === 'tree' && parts[2] && parts[3]) {
         await showSessionTree(parts[2], parts[3]);
       } else if (parts[1]) {
-        return createAgent({
-          ...options,
-          sessionId: parts[1],
-          resumeSession: true,
-        });
+        return {
+          switchedAgent: await createAgent({
+            ...options,
+            sessionId: parts[1],
+            resumeSession: true,
+          }),
+        };
       } else {
         const recorder = agent.getRecorder();
         console.log(`当前会话记录: ${recorder.getFilePath()}`);
@@ -479,14 +701,38 @@ async function handleChatCommand(
         console.log(
           '暂无可用技能。在 _skills/ 目录下创建子目录和 SKILL.md 即可添加技能。',
         );
-      } else {
-        console.log(`\n可用技能 (${list.length} 个):`);
-        for (const s of list) {
-          console.log(`  - ${s.name}: ${s.description}`);
-        }
-        console.log('');
+        break;
       }
-      break;
+
+      const selection = parts[1];
+      if (!selection) {
+        console.log(`\nSkills (${list.length} 个):`);
+        list.forEach((skill, index) => {
+          console.log(`  ${index + 1}. ${skill.name}`);
+        });
+        console.log('\n使用方式: /skills <名称或序号> [聊天内容]');
+        console.log('只选择 Skill 时，可在下一行输入聊天内容。\n');
+        break;
+      }
+
+      const index = Number(selection);
+      const selectedSkill =
+        Number.isInteger(index) && index >= 1
+          ? list[index - 1]
+          : skills.getSkill(selection);
+      if (!selectedSkill) {
+        console.log(`Skill 不存在: ${selection}，输入 /skills 查看可用列表`);
+        break;
+      }
+
+      const userInput = parts.slice(2).join(' ').trim();
+      if (!userInput) {
+        console.log(`已选择 Skill: ${selectedSkill.name}，请继续输入聊天内容。`);
+      }
+      return {
+        selectedSkillName: selectedSkill.name,
+        userInput: userInput || undefined,
+      };
     }
 
     default:
@@ -547,6 +793,14 @@ async function main(): Promise<void> {
 
     case 'chat':
       await chatCommand(flags);
+      break;
+
+    case 'skill':
+      if (args[0] !== 'add') {
+        console.error('用法: npm run cli -- skill add <owner/repo 或 URL>');
+        process.exit(1);
+      }
+      await skillAddCommand(args[1]);
       break;
 
     case 'session':

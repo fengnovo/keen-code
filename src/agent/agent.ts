@@ -52,10 +52,19 @@ export interface CreateAgentOptions {
   mcpServers?: Record<string, MCPRemoteServerConfig>;
   /** 本地 stdio MCP 服务配置 */
   mcpCommands?: Record<string, MCPStdioServerConfig>;
+  /** JSON 中已禁用、无需连接的 MCP 名称 */
+  disabledMCPNames?: string[];
   /** 自定义会话 ID（不传则自动生成） */
   sessionId?: string;
   /** 是否恢复指定会话的对话历史 */
   resumeSession?: boolean;
+}
+
+/** MCP 在当前 Agent 中的实际状态 */
+export interface MCPStatus {
+  name: string;
+  state: 'active' | 'failed' | 'disabled';
+  error?: string;
 }
 
 /** createAgent 的返回结果 */
@@ -70,6 +79,8 @@ export interface CreateAgentResult {
   sessionId: string;
   /** 已成功连接的 MCP 名称 */
   mcpNames: string[];
+  /** 全部 MCP 的生效状态 */
+  mcpStatuses: MCPStatus[];
   /** Agent 自带的工具名称（不包含 MCP 工具） */
   systemToolNames: string[];
 }
@@ -87,6 +98,9 @@ export async function createAgent(
   const mock = options.mock ?? false;
   const mcpClients: unknown[] = [];
   const mcpNames: string[] = [];
+  const mcpStatuses: MCPStatus[] = (options.disabledMCPNames || []).map(
+    (name) => ({ name, state: 'disabled' }),
+  );
   // 生成会话 ID（如果未传入）
   const sessionId =
     options.sessionId ||
@@ -142,8 +156,11 @@ export async function createAgent(
         const client = await connectMCP(name, config, toolRegistry);
         mcpClients.push(client);
         mcpNames.push(name);
+        mcpStatuses.push({ name, state: 'active' });
       } catch (e: unknown) {
-        console.error(`[MCP ${name}] 连接失败: ${(e as Error).message}`);
+        const error = (e as Error).message;
+        mcpStatuses.push({ name, state: 'failed', error });
+        console.error(`[MCP ${name}] 连接失败: ${error}`);
       }
     }
   }
@@ -154,8 +171,11 @@ export async function createAgent(
         const client = await connectMCPStdio(name, config, toolRegistry);
         mcpClients.push(client);
         mcpNames.push(name);
+        mcpStatuses.push({ name, state: 'active' });
       } catch (e: unknown) {
-        console.error(`[MCP ${name}] 连接失败: ${(e as Error).message}`);
+        const error = (e as Error).message;
+        mcpStatuses.push({ name, state: 'failed', error });
+        console.error(`[MCP ${name}] 连接失败: ${error}`);
       }
     }
   }
@@ -184,6 +204,7 @@ export async function createAgent(
     sandbox,
     sessionId,
     mcpNames,
+    mcpStatuses,
     systemToolNames,
   };
 }

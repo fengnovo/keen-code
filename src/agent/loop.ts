@@ -15,6 +15,36 @@ import { SessionRecorder } from './sessions/session.js';
 /** 每轮最多调用 10 次工具，防止死循环 */
 const MAX_TOOL_CALLS_PER_TURN = 20;
 
+/** 即使底层客户端没有及时响应 AbortSignal，也要立即结束当前等待。 */
+function waitWithAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  signal.throwIfAborted();
+
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => {
+      cleanup();
+      reject(
+        signal.reason instanceof Error
+          ? signal.reason
+          : new Error('请求已取消'),
+      );
+    };
+    const cleanup = (): void => signal.removeEventListener('abort', onAbort);
+
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (value) => {
+        cleanup();
+        resolve(value);
+      },
+      (error: unknown) => {
+        cleanup();
+        reject(error);
+      },
+    );
+  });
+}
+
 /** Agent 运行所需的依赖项 */
 export interface AgentRunOptions {
   mock?: boolean;
@@ -61,12 +91,15 @@ export class AgentRun {
    *
    * @param userInput 用户输入文本
    * @param callbacks 可选回调（流式输出、工具调用通知）
+   * @param signal 可选的中止信号
+   * @param selectedSkillName 本轮显式选择的 Skill 名称
    * @returns 最终回答文本
    */
   async run(
     userInput: string,
     callbacks?: RunCallbacks,
     signal?: AbortSignal,
+    selectedSkillName?: string,
   ): Promise<string> {
     const onToken = callbacks?.onToken;
     const onToolCall = callbacks?.onToolCall;
@@ -84,10 +117,26 @@ export class AgentRun {
       await this.recorder.sessionStart(userInput);
     }
 
+    // 显式选择 Skill 时，把完整说明仅注入本轮用户消息。
+    let userMessage = userInput;
+    if (selectedSkillName) {
+      const selectedSkill = this.skills.getSkill(selectedSkillName);
+      if (!selectedSkill) {
+        throw new Error(`Skill 不存在: ${selectedSkillName}`);
+      }
+      userMessage = [
+        `【已选择 Skill: ${selectedSkill.name}】`,
+        '请遵循下面的 Skill 说明处理本次请求：',
+        selectedSkill.content,
+        '【用户请求】',
+        userInput,
+      ].join('\n\n');
+    }
+
     // 添加用户消息到上下文
     this.context.addMessage({
       role: 'user',
-      content: userInput,
+      content: userMessage,
     });
 
     // 检查是否需要压缩历史（超过 20 轮时触发）
@@ -107,10 +156,13 @@ export class AgentRun {
         toolDefs.map((t) => t.name),
       );
       signal?.throwIfAborted();
-      const response = await this.llm.chat(messages, toolDefs, {
-        onToken,
+      const response = await waitWithAbort(
+        this.llm.chat(messages, toolDefs, {
+          onToken,
+          signal,
+        }),
         signal,
-      });
+      );
       await this.recorder.llmResponse(
         this.turnCount,
         response.content,

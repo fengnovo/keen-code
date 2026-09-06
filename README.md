@@ -412,6 +412,10 @@ npm run cli -- chat --mock
 npm run cli -- chat --sandbox docker
 npm run cli -- chat --mcp tandem=https://example.com/mcp
 
+# 安装 Skill 到当前项目的 _skills/（不会全局安装）
+npm run cli -- skill add vercel-labs/agent-skills
+npm run cli -- skill add https://modelscope.cn/skills/@anthropics/skill-creator
+
 # 会话记录查看
 npm run cli -- session list
 npm run cli -- session tree <sessionId> <runId>
@@ -435,6 +439,11 @@ npm run cli -- help
 |------|------|
 | `/exit` | 退出对话 |
 | `/help` | 查看可用命令 |
+| `/model` | 查看当前模型名称 |
+| `/mcp` | 查看全部 MCP 及生效状态 |
+| `/skills` | 查看所有已加载 Skill（带序号） |
+| `/skills <名称或序号>` | 选择 Skill，下一行输入聊天内容 |
+| `/skills <名称或序号> <消息>` | 选择 Skill 并直接发送聊天内容 |
 | `/session` | 查看当前会话记录路径 |
 | `/session <sessionId>` | 切换到指定会话并恢复历史 |
 | `/session list` | 列出所有 会话记录 |
@@ -442,7 +451,6 @@ npm run cli -- help
 | `/log` | 查看当前 session 的对话列表和每条输入摘要 |
 | `/compress` | 手动压缩对话历史 |
 | `/memory` | 查看当前记忆（短期 + 长期） |
-| `/skills` | 列出可用技能 |
 
 聊天请求进行中按一次 `Ctrl+C` 会取消当前 LLM 请求或 shell 工具，再按一次 `Ctrl+C` 退出程序。
 
@@ -660,4 +668,5 @@ npm run cli -- run "打开当前页面并检查控制台错误" \
 | `DEEPSEEK_API_KEY` | DeepSeek API 密钥 | 必填（非 mock 模式） |
 | `DEEPSEEK_BASE_URL` | DeepSeek API 地址 | `https://api.deepseek.com` |
 | `DEEPSEEK_MODEL` | 模型名称 | `deepseek-v4-flash` |
+| `DEEPSEEK_TIMEOUT_MS` | 完整模型响应超时（毫秒，`0` 表示近似不限时；不自动重试） | `0` |
 | `TAVILY_API_KEY` | Tavily 搜索 API 密钥（预留） | 可选 |
